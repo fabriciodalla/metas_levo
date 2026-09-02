@@ -6,6 +6,7 @@ from apps.sales_history.services import (
     DistributionBaselineService,
     SalesHistorySyncService,
     first_day_n_months_ago,
+    sync_lock,
 )
 
 
@@ -30,11 +31,12 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         min_date = first_day_n_months_ago(date.today(), options["months"] - 1)
 
-        accumulated_count = SalesHistorySyncService.sync_accumulated(min_date)
-        self.stdout.write(f"Acumulado: {accumulated_count} linha(s) sincronizada(s) desde {min_date}.")
+        with sync_lock():
+            accumulated_count = SalesHistorySyncService.sync_accumulated(min_date)
+            self.stdout.write(f"Acumulado: {accumulated_count} linha(s) sincronizada(s) desde {min_date}.")
 
-        portfolio_count = SalesHistorySyncService.sync_portfolio()
-        self.stdout.write(f"Carteira: {portfolio_count} cliente(s) sincronizado(s).")
+            portfolio_count = SalesHistorySyncService.sync_portfolio()
+            self.stdout.write(f"Carteira: {portfolio_count} cliente(s) sincronizado(s).")
 
-        baseline_count = DistributionBaselineService.rebuild()
-        self.stdout.write(f"Base de distribuição: {baseline_count} linha(s) recalculada(s).")
+            baseline_count = DistributionBaselineService.rebuild()
+            self.stdout.write(f"Base de distribuição: {baseline_count} linha(s) recalculada(s).")

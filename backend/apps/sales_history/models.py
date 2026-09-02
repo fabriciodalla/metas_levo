@@ -7,9 +7,12 @@ class AccumulatedSale(models.Model):
     Uma linha por combinação de supervisor/vendedor/cliente/subgrupo/data — o mesmo agrupamento
     da query original (8 colunas, não só vendedor+cliente+subgrupo+data: o mesmo vendedor pode
     aparecer com nk_supervisor diferente conforme a empresa da venda). Sem constraint de
-    unicidade de negócio por isso; a idempotência do sync vem de apagar por `sale_date` antes de
-    reinserir, não de upsert por chave. Repovoada pelo SalesHistorySyncService a cada
-    sincronização; nada aqui é escrito pela aplicação.
+    unicidade de negócio por isso; a idempotência do sync vem de apagar a tabela inteira antes de
+    reinserir (`SalesHistorySyncService.sync_accumulated`), não de upsert por chave — e essa
+    troca (apagar tudo + inserir) só é segura porque roda dentro do advisory lock
+    `apps.sales_history.services.sync_lock`, que serializa CLI e botão do SPA entre si (sem o
+    lock, dois syncs concorrentes duplicavam tudo — incidente de 2026-09-02). Repovoada pelo
+    SalesHistorySyncService a cada sincronização; nada aqui é escrito pela aplicação.
     """
 
     nk_supervisor = models.CharField(max_length=50)

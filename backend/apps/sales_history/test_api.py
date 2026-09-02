@@ -55,5 +55,10 @@ class SyncDataViewTests(APITestCase):
 
         self.client.post(reverse("sales-history-sync"))
 
-        mock_min_date.assert_called_once_with(date.today(), months_back=12)
+        # months_back=11 (não 12): first_day_n_months_ago já volta a partir do mês atual, então
+        # 11 meses pra trás + o mês atual = janela de 12 meses — a mesma conta que o CLI
+        # `sync_sales_history` faz por padrão (--months=12 → months_back = 12 - 1). Ver
+        # apps/sales_history/views.py — antes desse teste travava um bug (months_back=12 dava
+        # 13 meses, diferente da janela que o CLI sincronizava).
+        mock_min_date.assert_called_once_with(date.today(), months_back=11)
         mock_accumulated.assert_called_once_with(date(2025, 8, 1))

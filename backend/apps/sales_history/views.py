@@ -6,7 +6,12 @@ from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsAppAdmin
 
-from .services import DistributionBaselineService, SalesHistorySyncService, first_day_n_months_ago
+from .services import (
+    DistributionBaselineService,
+    SalesHistorySyncService,
+    first_day_n_months_ago,
+    sync_lock,
+)
 
 
 class SyncDataView(APIView):
@@ -18,11 +23,15 @@ class SyncDataView(APIView):
     permission_classes = [IsAuthenticated, IsAppAdmin]
 
     def post(self, request):
-        min_date = first_day_n_months_ago(date.today(), months_back=12)
+        # months_back=11: mesma janela de 12 meses (mês atual + 11 anteriores) que o CLI
+        # `sync_sales_history` usa por padrão (--months=12 → months_back = 12 - 1). Os dois
+        # precisam bater — senão cada entrada deixa um recorte de dado diferente na tabela.
+        min_date = first_day_n_months_ago(date.today(), months_back=11)
 
-        accumulated_count = SalesHistorySyncService.sync_accumulated(min_date)
-        portfolio_count = SalesHistorySyncService.sync_portfolio()
-        baseline_count = DistributionBaselineService.rebuild()
+        with sync_lock():
+            accumulated_count = SalesHistorySyncService.sync_accumulated(min_date)
+            portfolio_count = SalesHistorySyncService.sync_portfolio()
+            baseline_count = DistributionBaselineService.rebuild()
 
         return Response(
             {

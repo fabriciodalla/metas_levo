@@ -1,13 +1,15 @@
 import re
+import threading
 from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-from django.test import SimpleTestCase, TestCase
+from django.db import connections
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
 
 from .models import AccumulatedSale, ClientPortfolioSnapshot, DistributionBaseline
 from .queries import ACUMULADO_SQL, CARTEIRA_SQL
-from .services import DistributionBaselineService, SalesHistorySyncService
+from .services import DistributionBaselineService, SalesHistorySyncService, sync_lock
 
 
 def _mock_cursor(mock_connections, columns, rows):
@@ -68,13 +70,17 @@ class SalesHistorySyncServiceTests(TestCase):
         mock_connections.__getitem__.assert_called_once_with("sales_history")
 
     @patch("apps.sales_history.services.connections")
-    def test_sync_accumulated_replaces_only_rows_within_the_synced_window(self, mock_connections):
+    def test_sync_accumulated_replaces_the_whole_table_not_just_the_synced_window(self, mock_connections):
+        # Linha fora da janela sendo sincronizada (sale_date bem antes de min_date): precisa sumir
+        # também. Deixar rows fora da janela oficial (H2 = 12 meses) sobrando indefinidamente é o
+        # que fazia `DistributionBaselineService.rebuild()` — que lê a tabela sem filtro de data —
+        # calcular sobre meses a mais do que o decidido.
         AccumulatedSale.objects.create(
             nk_supervisor="B.F.1",
             nk_vendedor="B.F.2",
             salesperson_name="Antigo",
             client_code=1,
-            sale_date=date(2026, 6, 5),
+            sale_date=date(2025, 1, 5),
             subgroup_name="Linguicas",
             total_quantity=10,
             total_value=50,
@@ -123,6 +129,57 @@ class SalesHistorySyncServiceTests(TestCase):
         self.assertEqual(count, 1)
         self.assertFalse(ClientPortfolioSnapshot.objects.filter(client_code=999).exists())
         self.assertTrue(ClientPortfolioSnapshot.objects.filter(client_code=321).exists())
+
+
+class SyncLockTests(TransactionTestCase):
+    """Prova, com duas conexões reais de banco em threads separadas, que `sync_lock` serializa
+    execuções concorrentes — a causa raiz do incidente de 2026-09-02 (dois syncs sobrepostos
+    duplicaram `AccumulatedSale` porque nenhum via o DELETE não-commitado do outro). Usa
+    `TransactionTestCase` (não `TestCase`) porque o teste depende de commits reais visíveis entre
+    conexões — `TestCase` embrulha cada teste numa transação nunca commitada."""
+
+    def test_second_caller_blocks_until_first_releases_the_lock(self):
+        events = []
+        first_acquired = threading.Event()
+        release_first = threading.Event()
+        second_acquired = threading.Event()
+
+        def hold_lock():
+            with sync_lock():
+                events.append("first-acquired")
+                first_acquired.set()
+                release_first.wait(timeout=5)
+                events.append("first-released")
+            connections.close_all()
+
+        def try_lock():
+            first_acquired.wait(timeout=5)
+            events.append("second-waiting")
+            with sync_lock():
+                events.append("second-acquired")
+                second_acquired.set()
+            connections.close_all()
+
+        t1 = threading.Thread(target=hold_lock)
+        t2 = threading.Thread(target=try_lock)
+        t1.start()
+        t2.start()
+
+        # Dá tempo da segunda thread ficar de fato bloqueada em pg_advisory_xact_lock antes de
+        # liberar a primeira — sem isso o teste passaria mesmo se o lock não bloqueasse nada.
+        blocked_before_release = not second_acquired.wait(timeout=1)
+
+        release_first.set()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+
+        self.assertTrue(
+            blocked_before_release, "segunda chamada não deveria adquirir o lock antes da primeira soltar"
+        )
+        self.assertEqual(
+            events,
+            ["first-acquired", "second-waiting", "first-released", "second-acquired"],
+        )
 
 
 class DistributionBaselineServiceTests(TestCase):

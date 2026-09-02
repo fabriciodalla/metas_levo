@@ -1,11 +1,37 @@
 import datetime
 from collections import defaultdict
+from contextlib import contextmanager
 from decimal import ROUND_HALF_UP, Decimal
 
-from django.db import connections, transaction
+from django.db import connection, connections, transaction
 
 from .models import AccumulatedSale, ClientPortfolioSnapshot, DistributionBaseline
 from .queries import ACUMULADO_SQL, CARTEIRA_SQL
+
+# Chave arbitrária fixa pro advisory lock do Postgres (qualquer bigint serve, só precisa ser
+# sempre a mesma). Ver `sync_lock`.
+_SYNC_LOCK_ID = 8271_9430_01
+
+
+@contextmanager
+def sync_lock():
+    """Serializa qualquer combinação de sync_accumulated + sync_portfolio + rebuild entre chamadas
+    concorrentes — hoje isso pode acontecer via CLI (`sync_sales_history`) e via botão do SPA
+    (`SyncDataView`) ao mesmo tempo, ou dois cliques/duas abas batendo o botão.
+
+    Sem isso, duas sincronizações sobrepostas duplicam `AccumulatedSale`: cada uma roda seu
+    próprio DELETE + bulk_create dentro de um `transaction.atomic()` isolado, mas nenhuma enxerga
+    a outra até commitar (READ COMMITTED) — então o DELETE de uma não remove o INSERT ainda não
+    commitado da outra, e o resultado final é a união dos dois lotes (dado 2x). Foi exatamente o
+    que aconteceu em produção (ver investigação de 2026-09-02).
+
+    `pg_advisory_xact_lock` bloqueia a segunda chamada até a primeira transação terminar (commit
+    ou rollback) — sem precisar de unlock manual nem de infra nova (Celery/Redis).
+    """
+    with transaction.atomic():
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_advisory_xact_lock(%s)", [_SYNC_LOCK_ID])
+        yield
 
 
 def _fetch_as_dicts(alias: str, sql: str, params: list | None = None) -> list[dict]:
@@ -36,7 +62,12 @@ class SalesHistorySyncService:
         rows = _fetch_as_dicts("sales_history", ACUMULADO_SQL, [min_date])
 
         with transaction.atomic():
-            AccumulatedSale.objects.filter(sale_date__gte=min_date).delete()
+            # Substitui a tabela inteira, não só `sale_date >= min_date`: um sync anterior rodado
+            # com uma janela maior (ex.: --months=15 avulso) não pode deixar meses fora da janela
+            # oficial (H2 = 12 meses, Decisão 6) sobrando pra sempre — `DistributionBaselineService
+            # .rebuild()` lê a tabela toda, sem filtro de data, então qualquer linha esquecida aqui
+            # entra na base de cálculo. Mesmo padrão que `sync_portfolio` já usava.
+            AccumulatedSale.objects.all().delete()
             AccumulatedSale.objects.bulk_create(
                 AccumulatedSale(
                     nk_supervisor=row["nk_supervisor"],
