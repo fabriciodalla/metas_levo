@@ -15,9 +15,9 @@ from apps.allocations.services import CycleCompletenessChecker, VendedorAllocati
 
 from .models import Cycle
 from .serializers import CycleSerializer, StuckAllocationSerializer
-from .services import CloseCycleService, CycleNotCompleteError
+from .services import CloseCycleService, CycleAlreadyExistsError, CycleNotCompleteError, OpenCycleService
 
-ADMIN_ONLY_ACTIONS = ("distribution_overview", "export", "vendedor_report")
+ADMIN_ONLY_ACTIONS = ("open", "distribution_overview", "export", "vendedor_report")
 
 
 class CycleViewSet(ReadOnlyModelViewSet):
@@ -41,11 +41,22 @@ class CycleViewSet(ReadOnlyModelViewSet):
             }
         )
 
+    @action(detail=False, methods=["post"])
+    def open(self, request):
+        serializer = CycleSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            cycle = OpenCycleService.open(serializer.validated_data["ano"], serializer.validated_data["mes"])
+        except CycleAlreadyExistsError as exc:
+            return Response({"detail": ", ".join(exc.messages)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(CycleSerializer(cycle).data, status=status.HTTP_201_CREATED)
+
     @action(detail=True, methods=["post"])
     def close(self, request, pk=None):
         cycle = self.get_object()
+        force = bool(request.data.get("force"))
         try:
-            CloseCycleService.close(cycle)
+            CloseCycleService.close(cycle, force=force)
         except CycleNotCompleteError as exc:
             return Response({"detail": ", ".join(exc.messages)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(CycleSerializer(cycle).data)

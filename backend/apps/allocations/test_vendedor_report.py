@@ -146,6 +146,9 @@ class VendedorAllocationReportServiceTests(TestCase):
         self._distribute_full_chain()
         local_alloc = self.supervisor_alloc.parent_allocation
 
+        # local_alloc só libera depois que o filho que já avançou (supervisor_alloc, já repassado
+        # pro Vendedor) reseta a própria distribuição primeiro (trava nova, 2026-08-04).
+        ReopenAllocationService.reopen(self.supervisor_alloc, criado_por=self.supervisor_user)
         ReopenAllocationService.reopen(local_alloc, criado_por=self.local_user)
         (new_supervisor_alloc,) = DistributeGoalService.distribute(
             local_alloc,

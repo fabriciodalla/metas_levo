@@ -48,6 +48,7 @@ export interface GoalAllocation {
   product: number | null;
   quantity_kg: number;
   distributed: boolean;
+  has_further_distribution: boolean;
   criado_por: number;
   created_at: string;
   updated_at: string;
@@ -125,6 +126,28 @@ export interface SyncResult {
   baseline_count: number;
 }
 
+export interface VendorGroupTotal {
+  grupo_id: number;
+  avg_3_months_kg: number;
+  avg_12_months_kg: number;
+}
+
+export interface VendorGroupSummaryRow {
+  id: number;
+  nome: string;
+  mapeado: boolean;
+  supervisor_id: number | null;
+  supervisor_nome: string | null;
+  local_id: number | null;
+  local_nome: string | null;
+  totals: VendorGroupTotal[];
+}
+
+export interface VendorGroupSummary {
+  grupos: { id: number; nome: string }[];
+  vendedores: VendorGroupSummaryRow[];
+}
+
 export interface UserAccount {
   id: number;
   username: string;
@@ -156,6 +179,8 @@ export interface ChildDistributionContext {
   owner_node_id: number;
   history: MonthlyPoint[];
   same_month_last_year_kg: number | null;
+  /** Quando a alocação sendo distribuída é de um subgrupo específico (Meta Supervisor/Meta
+   * Vendedor), este valor já é a média daquele subgrupo, não do grupo inteiro. */
   last_3_months_avg_kg: number | null;
   historical_share_pct: number | null;
   has_gap: boolean;

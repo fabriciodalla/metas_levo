@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { GoalAllocation, ProductGroup, ProductSubgroup } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { useCycleAllocationsData } from "../pages/useCycleAllocationsData";
+import { ResetGroupDistributionButton } from "./ResetGroupDistributionButton";
 import { SupervisorDistributionWorkspace, type SupervisorWorkspaceRow } from "./SupervisorDistributionWorkspace";
 import { useGroupSupervisorDraft } from "./useGroupSupervisorDraft";
 import { Alert } from "./ui/Alert";
@@ -122,10 +123,13 @@ interface Props {
 // mostra, por alvo, só o subgrupo escolhido — nunca todos ao mesmo tempo. O rascunho de TODOS os
 // subgrupos do grupo fica vivo ao navegar entre eles (useGroupSupervisorDraft) — só é descartado
 // ao trocar de grupo/ciclo (com aviso) ou depois de salvo; "Salvar distribuição" grava de uma vez
-// todo subgrupo já fechado (soma = meta), sem exigir um clique por subgrupo. Cada subgrupo
-// continua persistido pelo mesmo endpoint POST /allocations/{id}/distribute/ já usado em
-// Gerente→Local, com a mesma invariante de fechamento exato — só a
-// orquestração muda.
+// todo subgrupo do grupo, sem exigir um clique por subgrupo — mas só libera quando TODOS os
+// subgrupos do grupo (não só os que a pessoa abriu) estão completos: todo alvo preenchido, soma =
+// meta exata (revisão 2026-09-03, ver `canSaveGroup`) — mesma regra já exigida em
+// Gerente→Local (`useDistributionRows`/`DistributionForm`), aplicada aqui ao
+// grupo inteiro em vez de uma alocação por vez. Cada subgrupo continua persistido pelo mesmo
+// endpoint POST /allocations/{id}/distribute/ já usado nessas telas, com a mesma invariante de
+// fechamento exato — só a orquestração muda.
 export function SubgroupCascadeWorkspace({ ownerLevel, noAccessMessage, targetLabelPlural, targetLabelSingular }: Props) {
   const { user } = useAuth();
   const { cycles, selectedCycleId, setSelectedCycleId, allocations, nodes, loading, refresh } =
@@ -221,18 +225,26 @@ export function SubgroupCascadeWorkspace({ ownerLevel, noAccessMessage, targetLa
   // são filhos diretos desse nó, então não dependem de qual subgrupo está aberto no momento, só do
   // grupo.
   const groupOwnerNodeId = subgroupsInGroup[0]?.owner_node ?? null;
+  // `nodes` inclui nós inativados (o admin precisa vê-los na tela de Hierarquia) — sem o filtro
+  // de `ativo`, um Supervisor/Vendedor removido/substituído (Decisão 10, O4) continuava aparecendo
+  // como alvo de distribuição ao lado de quem ocupa a posição agora.
   const targets = useMemo(
-    () => (groupOwnerNodeId !== null ? nodes.filter((n) => n.parent === groupOwnerNodeId) : []),
+    () => (groupOwnerNodeId !== null ? nodes.filter((n) => n.parent === groupOwnerNodeId && n.ativo) : []),
     [nodes, groupOwnerNodeId],
   );
 
   const groupDraft = useGroupSupervisorDraft(selectedGroupId, targets);
 
   useEffect(() => {
-    if (selectedAllocation && !selectedAllocation.distributed) {
+    if (!selectedAllocation) return;
+    if (selectedAllocation.distributed) {
+      // Só o contexto (pra "Média 3 meses"/"% crescimento" informativas no card) — sem criar
+      // rascunho nenhum, já que este subgrupo não tem mais nada a distribuir.
+      groupDraft.ensureContextLoaded(selectedAllocation.id);
+    } else {
       groupDraft.ensureLoaded(selectedAllocation.id);
     }
-  }, [selectedAllocation, groupDraft.ensureLoaded]);
+  }, [selectedAllocation, groupDraft.ensureLoaded, groupDraft.ensureContextLoaded]);
 
   const persistedTotalsAllGroups = useMemo(() => {
     const totals = new Map<number, number>();
@@ -259,6 +271,10 @@ export function SubgroupCascadeWorkspace({ ownerLevel, noAccessMessage, targetLa
   }, [allocations, targets, subgroupById, selectedGroupId]);
 
   const groupTotalKg = useMemo(() => subgroupsInGroup.reduce((sum, a) => sum + a.quantity_kg, 0), [subgroupsInGroup]);
+  const distributedSubgroupsInGroup = useMemo(
+    () => subgroupsInGroup.filter((a) => a.distributed),
+    [subgroupsInGroup],
+  );
 
   // Fonte única do que já foi "efetivamente distribuído" pra cada subgrupo — persistido de
   // verdade se já foi salvo, senão o rascunho ao vivo (ainda não salvo) desta sessão. Usado tanto
@@ -318,6 +334,21 @@ export function SubgroupCascadeWorkspace({ ownerLevel, noAccessMessage, targetLa
     });
   }
 
+  // Pedido explícito do usuário (2026-09-03): resetar todos os subgrupos já distribuídos do grupo
+  // de uma vez (ResetGroupDistributionButton), em vez de um por um — e já recarregar a sugestão
+  // automática (`force=true`) em cada um, pronta pra revisar e salvar de novo (nunca se auto-aplica).
+  function handleResetGroup(resetAllocationIds: number[]) {
+    refresh();
+    for (const allocationId of resetAllocationIds) {
+      groupDraft.ensureLoaded(allocationId, true);
+    }
+    setSavedMessage(
+      resetAllocationIds.length === 1
+        ? "1 subgrupo resetado — sugestão automática recarregada."
+        : `${resetAllocationIds.length} subgrupos resetados — sugestão automática recarregada.`,
+    );
+  }
+
   if (myOwnerNodeIds.size === 0) {
     return <EmptyState>{noAccessMessage}</EmptyState>;
   }
@@ -340,14 +371,21 @@ export function SubgroupCascadeWorkspace({ ownerLevel, noAccessMessage, targetLa
     ? []
     : isSelectedDistributed
       ? (() => {
+          // Mesmo aqui (subgrupo aberto no momento já salvo, cards em modo leitura) precisa somar
+          // `liveDraftForTarget` — senão "Meta no grupo"/"Total distribuído no grupo" cai de
+          // repente ao navegar pra um subgrupo já fechado, ignorando o rascunho ainda não salvo
+          // dos OUTROS subgrupos do mesmo grupo (bug real, 2026-08-07: a soma "sumia" só de
+          // clicar entre subgrupos, sem nenhuma mudança de valor).
           const persistedChildren = allocations.filter((a) => a.parent_allocation === selectedAllocation.id);
           return targets.map((target) => {
             const child = persistedChildren.find((c) => c.owner_node === target.id);
             return {
               supervisor: target,
               quantityKg: child?.quantity_kg ?? 0,
-              metaTotalSupervisorKg: persistedTotalsAllGroups.get(target.id) ?? 0,
-              metaSupervisorGrupoKg: persistedTotalsInGroup.get(target.id) ?? 0,
+              metaTotalSupervisorKg: (persistedTotalsAllGroups.get(target.id) ?? 0) + liveDraftForTarget(target.id),
+              metaSupervisorGrupoKg: (persistedTotalsInGroup.get(target.id) ?? 0) + liveDraftForTarget(target.id),
+              last3MonthsAvgKg:
+                groupDraft.contextBySubgroup[selectedAllocation.id]?.[target.id]?.last_3_months_avg_kg ?? null,
             };
           });
         })()
@@ -357,11 +395,18 @@ export function SubgroupCascadeWorkspace({ ownerLevel, noAccessMessage, targetLa
           onChange: (value: number | "") => groupDraft.updateCell(selectedAllocation.id, target.id, value),
           metaTotalSupervisorKg: (persistedTotalsAllGroups.get(target.id) ?? 0) + liveDraftForTarget(target.id),
           metaSupervisorGrupoKg: (persistedTotalsInGroup.get(target.id) ?? 0) + liveDraftForTarget(target.id),
+          last3MonthsAvgKg:
+            groupDraft.contextBySubgroup[selectedAllocation.id]?.[target.id]?.last_3_months_avg_kg ?? null,
         }));
 
   const workspaceTotal = selectedAllocation ? distribuidoFor(selectedAllocation) : 0;
   const workspaceDiff = selectedAllocation ? selectedAllocation.quantity_kg - workspaceTotal : 0;
   const groupHasDraft = groupDraft.hasAnyDraft(subgroupsInGroup);
+  // Regra já estipulada nas outras telas de distribuição (Gerente→Regional, Regional→Local): só
+  // libera "Salvar distribuição" quando TODO subgrupo do grupo (com meta > 0) tem todos os alvos
+  // preenchidos e fecha exato com a meta — nem mais, nem menos, e nem só os que a pessoa abriu
+  // (ver `canSaveGroup`); equivale a exigir "Restante total" (rodapé da lateral) zerado.
+  const groupIsReadyToSave = groupDraft.canSaveGroup(subgroupsInGroup);
 
   return (
     <section className="sv-shell">
@@ -455,6 +500,19 @@ export function SubgroupCascadeWorkspace({ ownerLevel, noAccessMessage, targetLa
             />
           </div>
 
+          {groupOwnerNodeId !== null && selectedGroupId !== null && selectedCycleId !== null && (
+            <div className="group-overview-actions">
+              <ResetGroupDistributionButton
+                ownerNodeId={groupOwnerNodeId}
+                cycleId={selectedCycleId}
+                groupId={selectedGroupId}
+                groupNome={selectedGroupNome}
+                distributedSubgroups={distributedSubgroupsInGroup}
+                onReset={handleResetGroup}
+              />
+            </div>
+          )}
+
           <div className="sv-body">
             <SubgroupSidebar
               subgroups={subgroupsInGroup}
@@ -476,7 +534,7 @@ export function SubgroupCascadeWorkspace({ ownerLevel, noAccessMessage, targetLa
                 diff={workspaceDiff}
                 editable={!isSelectedDistributed}
                 submitting={groupDraft.submitting}
-                canSave={groupHasDraft && !groupDraft.submitting}
+                canSave={groupIsReadyToSave && !groupDraft.submitting}
                 hasDraft={groupHasDraft}
                 error={groupDraft.error}
                 info={groupDraft.info}
@@ -491,8 +549,9 @@ export function SubgroupCascadeWorkspace({ ownerLevel, noAccessMessage, targetLa
 
           <Alert variant="info">
             A soma das metas definidas deve ser igual à meta de cada subgrupo. Você pode navegar entre os
-            subgrupos e grupos sem perder o que já preencheu — o salvamento grava de uma vez todo subgrupo já
-            fechado (diferença zero).
+            subgrupos e grupos sem perder o que já preencheu — mas "Salvar distribuição" só libera quando
+            TODOS os subgrupos do grupo (não só os que você abriu) tiverem todos os alvos preenchidos e
+            fecharem exato com a meta (nem mais, nem menos) — passe por todos antes de salvar.
           </Alert>
         </>
       )}

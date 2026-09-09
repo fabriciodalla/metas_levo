@@ -1,3 +1,4 @@
+from django.db.models import Exists, OuterRef
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.decorators import action
@@ -8,6 +9,7 @@ from rest_framework.viewsets import ReadOnlyModelViewSet
 from apps.catalog.models import ProductGroup
 from apps.cycles.models import Cycle
 from apps.hierarchy.models import HierarchyNode
+from apps.hierarchy.services import ExternalSalespersonMatchingService
 
 from .models import GoalAllocation
 from .serializers import (
@@ -16,6 +18,7 @@ from .serializers import (
     DistributeRequestSerializer,
     GoalAllocationSerializer,
     GroupSuggestionSerializer,
+    ResetGroupRequestSerializer,
     SplitSubgroupsRequestSerializer,
     SubgroupDistributionContextSerializer,
 )
@@ -30,6 +33,7 @@ from .services import (
     DistributionContextService,
     GoalSuggestionService,
     ReopenAllocationService,
+    SelfVendedorAutoDistributionService,
     SplitGroupIntoSubgroupsService,
     SubgroupDistributionContextService,
     SubgroupSplitSpec,
@@ -41,10 +45,31 @@ class GoalAllocationViewSet(ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        # `has_further_distribution` (exibido como `GoalAllocationSerializer` abaixo) diz se algum
+        # filho direto já repassou adiante o que recebeu, com trabalho real por trás — é a trava
+        # do botão "Resetar distribuição" (2026-08-04): reabrir aqui apagaria em cascata um
+        # trabalho que já avançou pra baixo. Dois casos NÃO contam como trabalho real (revisão
+        # 2026-09-03), então ficam de fora do bloqueio:
+        #   - `quantity_kg__gt=0`: um filho com 0 kg não perde nada se recriado do zero.
+        #   - `owner_node_id` fora de `self_managed_ids`: repasse automático de autogestão
+        #     (`SelfVendedorAutoDistributionService`, único alvo possível) não é decisão de
+        #     ninguém — acontece de novo sozinho, idêntico, se o pai for resetado e redistribuído
+        #     com outra quantidade — então vale mesmo com quantidade > 0.
+        # Subquery em vez de checar em Python pra não virar N+1 numa lista com centenas de
+        # alocações; `self_managed_ids` é 1 query em lote (ver
+        # `SelfVendedorAutoDistributionService.self_managed_supervisor_ids`), não por linha.
+        self_managed_ids = SelfVendedorAutoDistributionService.self_managed_supervisor_ids()
         queryset = (
             GoalAllocation.objects.visible_to(self.request.user)
             .select_related("owner_node", "group", "subgroup__group")
             .prefetch_related("owner_node__users")
+            .annotate(
+                has_further_distribution=Exists(
+                    GoalAllocation.objects.filter(
+                        parent_allocation=OuterRef("pk"), distributed=True, quantity_kg__gt=0
+                    ).exclude(owner_node_id__in=self_managed_ids)
+                )
+            )
         )
         cycle_id = self.request.query_params.get("cycle")
         if cycle_id:
@@ -89,6 +114,11 @@ class GoalAllocationViewSet(ReadOnlyModelViewSet):
                 {"detail": "Você não tem acesso a essa alocação."}, status=status.HTTP_403_FORBIDDEN
             )
 
+        # Sem custo de rede (só tabelas locais já sincronizadas) — garante que um Vendedor
+        # cadastrado depois da última sincronização manual já entra com histórico real na
+        # sugestão, em vez de aparecer zerado até alguém lembrar de rodar o comando (bug real,
+        # 2026-08-07, ver `ExternalSalespersonMatchingService`).
+        ExternalSalespersonMatchingService.sync()
         contexts = DistributionContextService.build(allocation)
         return Response(ChildDistributionContextSerializer(contexts, many=True).data)
 
@@ -103,6 +133,8 @@ class GoalAllocationViewSet(ReadOnlyModelViewSet):
                 {"detail": "Você não tem acesso a essa alocação."}, status=status.HTTP_403_FORBIDDEN
             )
 
+        # Mesmo motivo de `distribution_context` acima.
+        ExternalSalespersonMatchingService.sync()
         contexts = SubgroupDistributionContextService.build(allocation)
         return Response(SubgroupDistributionContextSerializer(contexts, many=True).data)
 
@@ -138,6 +170,30 @@ class GoalAllocationViewSet(ReadOnlyModelViewSet):
             return Response({"detail": ", ".join(exc.messages)}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(GoalAllocationSerializer(allocation).data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="reset-group")
+    def reset_group(self, request):
+        """Telas "Meta Supervisor"/"Meta Vendedor" (`SubgroupCascadeWorkspace`): reseta de uma vez
+        todos os subgrupos já distribuídos de um grupo, pro nível que os possui neste ciclo —
+        alternativa em lote ao `reopen()` por subgrupo, pra quando o nível errou a distribuição do
+        grupo inteiro."""
+        request_serializer = ResetGroupRequestSerializer(data=request.data)
+        request_serializer.is_valid(raise_exception=True)
+        data = request_serializer.validated_data
+
+        cycle = get_object_or_404(Cycle, id=data["cycle_id"])
+        owner_node = get_object_or_404(HierarchyNode, id=data["owner_node_id"])
+
+        try:
+            reset_allocations = ReopenAllocationService.reopen_group(
+                owner_node=owner_node, cycle=cycle, group_id=data["group_id"], criado_por=request.user
+            )
+        except (AllocationScopeError, AllocationReopenError) as exc:
+            return Response({"detail": ", ".join(exc.messages)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            GoalAllocationSerializer(reset_allocations, many=True).data, status=status.HTTP_200_OK
+        )
 
     @action(detail=False, methods=["get"])
     def suggestions(self, request):

@@ -3,7 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { ProductGroup } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import { ResetDistributionButton } from "../components/ResetDistributionButton";
 import { SubgroupSplitForm } from "../components/SubgroupSplitForm";
+import { Badge } from "../components/ui/Badge";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Spinner } from "../components/ui/Spinner";
 import { useCycleAllocationsData } from "./useCycleAllocationsData";
@@ -34,6 +36,17 @@ export function DistribuirProdutosPage() {
     () =>
       allocations
         .filter((a) => myLocalNodeIds.has(a.owner_node) && a.granularity === "GROUP" && !a.distributed)
+        .sort((a, b) => groupNome(a.group).localeCompare(groupNome(b.group), "pt-BR", { sensitivity: "base" })),
+    [allocations, myLocalNodeIds, groupNameById],
+  );
+
+  // Grupos já divididos por subgrupo — somem da lista de pendências acima, mas precisam continuar
+  // visíveis em algum lugar pra dar acesso ao "Resetar distribuição" (corrigir um erro de divisão
+  // sem precisar ir em outra tela).
+  const done = useMemo(
+    () =>
+      allocations
+        .filter((a) => myLocalNodeIds.has(a.owner_node) && a.granularity === "GROUP" && a.distributed)
         .sort((a, b) => groupNome(a.group).localeCompare(groupNome(b.group), "pt-BR", { sensitivity: "base" })),
     [allocations, myLocalNodeIds, groupNameById],
   );
@@ -113,6 +126,38 @@ export function DistribuirProdutosPage() {
 
       {selectedAllocation && (
         <SubgroupSplitForm key={selectedAllocation.id} allocation={selectedAllocation} onSplit={handleSplit} />
+      )}
+
+      {done.length > 0 && (
+        <>
+          <h2>Já dividido ({done.length})</h2>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Grupo</th>
+                  <th>Quantidade</th>
+                  <th>Status</th>
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {done.map((allocation) => (
+                  <tr key={allocation.id}>
+                    <td>{groupNome(allocation.group)}</td>
+                    <td>{allocation.quantity_kg} kg</td>
+                    <td>
+                      <Badge variant="success">Dividido</Badge>
+                    </td>
+                    <td>
+                      <ResetDistributionButton allocation={allocation} onReset={refresh} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </section>
   );

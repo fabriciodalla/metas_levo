@@ -2,7 +2,10 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 
+from apps.sales_history.models import DistributionBaseline
+
 from .models import ExternalSalespersonMapping, FeristaCoverage, HierarchyClosure, HierarchyNode
+from .services import ExternalSalespersonMatchingService
 
 
 class HierarchyNodeTests(TestCase):
@@ -86,6 +89,63 @@ class ExternalSalespersonMappingTests(TestCase):
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
                 ExternalSalespersonMapping.objects.create(external_name="FULANO", hierarchy_node=vendedor_b)
+
+
+class ExternalSalespersonMatchingServiceTests(TestCase):
+    """Bug real (2026-08-07): um Vendedor novo (ex.: Rafael Pereira de Quadros) com histórico real
+    em `DistributionBaseline` saía com sugestão zerada até alguém lembrar de rodar o comando
+    manual `match_external_salespersons` — `sync()` é o mesmo casamento, chamado sozinho a cada
+    abertura da tela de distribuição (ver `allocations/views.py`)."""
+
+    def test_sync_creates_mapping_for_exact_name_match(self):
+        vendedor = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Fulano Da Silva")
+        DistributionBaseline.objects.create(
+            ano=2026, mes=7, salesperson_name="Fulano Da Silva", subgroup_name="X", total_quantity=100
+        )
+
+        created, unmatched = ExternalSalespersonMatchingService.sync()
+
+        self.assertEqual(created, ["Fulano Da Silva"])
+        self.assertEqual(unmatched, [])
+        mapping = ExternalSalespersonMapping.objects.get(hierarchy_node=vendedor)
+        self.assertEqual(mapping.external_name, "Fulano Da Silva")
+
+    def test_sync_does_not_approximate_inexact_name(self):
+        HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Fulano")
+        DistributionBaseline.objects.create(
+            ano=2026, mes=7, salesperson_name="Fulano Da Silva", subgroup_name="X", total_quantity=100
+        )
+
+        created, unmatched = ExternalSalespersonMatchingService.sync()
+
+        self.assertEqual(created, [])
+        self.assertEqual(unmatched, ["Fulano"])
+        self.assertFalse(ExternalSalespersonMapping.objects.exists())
+
+    def test_sync_is_idempotent(self):
+        HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Fulano Da Silva")
+        DistributionBaseline.objects.create(
+            ano=2026, mes=7, salesperson_name="Fulano Da Silva", subgroup_name="X", total_quantity=100
+        )
+
+        ExternalSalespersonMatchingService.sync()
+        created_second_run, _unmatched = ExternalSalespersonMatchingService.sync()
+
+        self.assertEqual(created_second_run, [])
+        self.assertEqual(ExternalSalespersonMapping.objects.count(), 1)
+
+    def test_sync_skips_node_already_mapped_to_a_different_name(self):
+        vendedor = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Fulano Da Silva")
+        ExternalSalespersonMapping.objects.create(external_name="NOME ANTIGO", hierarchy_node=vendedor)
+        DistributionBaseline.objects.create(
+            ano=2026, mes=7, salesperson_name="Fulano Da Silva", subgroup_name="X", total_quantity=100
+        )
+
+        created, _unmatched = ExternalSalespersonMatchingService.sync()
+
+        self.assertEqual(created, [])
+        mapping = ExternalSalespersonMapping.objects.get(hierarchy_node=vendedor)
+        self.assertEqual(mapping.external_name, "NOME ANTIGO")
 
 
 class FeristaCoverageTests(TestCase):

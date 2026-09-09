@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import Case, IntegerField, Value, When
 
 
 class HierarchyNodeQuerySet(models.QuerySet):
@@ -14,6 +15,22 @@ class HierarchyNodeQuerySet(models.QuerySet):
         from .services import ScopeResolver
 
         return self.filter(id__in=ScopeResolver.descendant_ids(node_ids))
+
+    def by_seniority(self):
+        """Ordena da posição mais sênior (Gerente) pra menos sênior (Vendedor), com `id` como
+        desempate — define qual posição é a "principal" de alguém que acumula mais de uma
+        (Decisão 10/O5, ver `UserAccountSerializer._sync_position`). Bug real, 2026-08-07:
+        ordenar por `id` (ordem de criação) em vez de senioridade fazia uma promoção — cargo
+        mais alto registrado depois, como posição extra — nunca virar "a principal"; editar o
+        cargo principal continuava mexendo no cargo antigo e mais baixo, e como a posição extra
+        já tinha o nível/superior que se queria dar ao principal, isso criava um cargo duplicado
+        em vez de reconhecer que a pessoa já tinha o cargo novo."""
+        level_order = [choice[0] for choice in HierarchyNode.Level.choices]
+        rank = Case(
+            *(When(level=level, then=Value(i)) for i, level in enumerate(level_order)),
+            output_field=IntegerField(),
+        )
+        return self.annotate(_seniority_rank=rank).order_by("_seniority_rank", "id")
 
 
 class HierarchyNode(models.Model):
@@ -89,9 +106,11 @@ class ExternalSalespersonMapping(models.Model):
     `DistributionBaseline`/`ClientPortfolioSnapshot` — texto livre, sem código estável) para o
     `HierarchyNode` interno correspondente. Parte de O3/O5 (ver docs/open-questions.md).
 
-    Precisa ser populado manualmente (Django Admin) — não há casamento automático por nome: nome
-    livre não é confiável o suficiente para atribuir histórico de vendas a um nó sem curadoria
-    humana (nomes podem divergir em formatação, ter homônimos, ou mudar ao longo do tempo).
+    Populado automaticamente por igualdade EXATA de nome contra `DistributionBaseline.
+    salesperson_name` (Decisão 9, revisão 2026-07-22) — ver `ExternalSalespersonMatchingService`
+    em `hierarchy/services.py`, que roda sozinho a cada abertura da tela de distribuição. Nome que
+    não bate exato (formatação diferente, homônimo, mudou ao longo do tempo) não é aproximado
+    automaticamente — continua exigindo curadoria manual via Django Admin.
     """
 
     external_name = models.CharField(max_length=150, unique=True)

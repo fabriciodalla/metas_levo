@@ -47,12 +47,13 @@ function formatSignedKg(diff: number): string {
   return `${sign}${Math.abs(Math.round(diff)).toLocaleString("pt-BR")} kg`;
 }
 
-// vs. ano passado e vs. últimos 3 meses comparam a sugestão a faturamento REAL (não a
+// vs. ano passado e vs. últimos 3 meses comparam o valor da META (o que está no campo editável —
+// sugestão por padrão, mas o que o Gerente efetivamente digitar) a faturamento REAL (não a
 // componentes internos do modelo) — são as duas leituras que o gerente usa pra calibrar a meta.
-function yoyPct(suggestion: GroupSuggestion): number | null {
+function yoyPct(metaKg: number, suggestion: GroupSuggestion): number | null {
   const lastYear = suggestion.same_month_last_year_kg;
   if (lastYear === null || lastYear <= 0) return null;
-  return ((suggestion.suggested_kg - lastYear) / lastYear) * 100;
+  return ((metaKg - lastYear) / lastYear) * 100;
 }
 
 function last3MonthsAvg(history: MonthlyPoint[]): number | null {
@@ -61,24 +62,28 @@ function last3MonthsAvg(history: MonthlyPoint[]): number | null {
   return last3.reduce((sum, point) => sum + point.quantity_kg, 0) / last3.length;
 }
 
-function vs3MonthsPct(suggestion: GroupSuggestion): number | null {
+function vs3MonthsPct(metaKg: number, suggestion: GroupSuggestion): number | null {
   const avg3 = last3MonthsAvg(suggestion.history);
   if (avg3 === null || avg3 <= 0) return null;
-  return ((suggestion.suggested_kg - avg3) / avg3) * 100;
+  return ((metaKg - avg3) / avg3) * 100;
 }
 
-function aggregateYoyPct(suggestions: GroupSuggestion[]): number | null {
-  const totalSuggested = suggestions.reduce((sum, s) => sum + s.suggested_kg, 0);
+function editedKgFor(suggestion: GroupSuggestion, edits: Record<number, string>): number {
+  return Math.round(Number(edits[suggestion.group_id] ?? suggestion.suggested_kg));
+}
+
+function aggregateYoyPct(suggestions: GroupSuggestion[], edits: Record<number, string>): number | null {
+  const totalMeta = suggestions.reduce((sum, s) => sum + editedKgFor(s, edits), 0);
   const totalLastYear = suggestions.reduce((sum, s) => sum + (s.same_month_last_year_kg ?? 0), 0);
   if (totalLastYear <= 0) return null;
-  return ((totalSuggested - totalLastYear) / totalLastYear) * 100;
+  return ((totalMeta - totalLastYear) / totalLastYear) * 100;
 }
 
-function aggregateVs3MonthsPct(suggestions: GroupSuggestion[]): number | null {
-  const totalSuggested = suggestions.reduce((sum, s) => sum + s.suggested_kg, 0);
+function aggregateVs3MonthsPct(suggestions: GroupSuggestion[], edits: Record<number, string>): number | null {
+  const totalMeta = suggestions.reduce((sum, s) => sum + editedKgFor(s, edits), 0);
   const totalAvg3 = suggestions.reduce((sum, s) => sum + (last3MonthsAvg(s.history) ?? 0), 0);
   if (totalAvg3 <= 0) return null;
-  return ((totalSuggested - totalAvg3) / totalAvg3) * 100;
+  return ((totalMeta - totalAvg3) / totalAvg3) * 100;
 }
 
 // Só usado na frase de explicação (tom de negócio) — não vira mais um número solto no card.
@@ -134,11 +139,11 @@ function ComparisonCol({ label, pct, refLabel }: { label: string; pct: number | 
 function GroupCard({ suggestion, cycle, totalSuggestedKg, value, onChange }: GroupCardProps) {
   const [expanded, setExpanded] = useState(false);
   const pctOfTotal = totalSuggestedKg > 0 ? (suggestion.suggested_kg / totalSuggestedKg) * 100 : 0;
-  const yoy = yoyPct(suggestion);
-  const vs3 = vs3MonthsPct(suggestion);
 
   const editedValue = Math.round(Number(value || suggestion.suggested_kg));
   const diff = editedValue - suggestion.suggested_kg;
+  const yoy = yoyPct(editedValue, suggestion);
+  const vs3 = vs3MonthsPct(editedValue, suggestion);
 
   const monthName = MONTH_FULL[cycle.mes - 1];
   const seasonal = seasonalPct(suggestion);
@@ -149,14 +154,14 @@ function GroupCard({ suggestion, cycle, totalSuggestedKg, value, onChange }: Gro
   const explanationParts: string[] = [];
   if (yoy !== null) {
     explanationParts.push(
-      `Frente ao mesmo mês do ano passado, a sugestão representa ${
+      `Frente ao mesmo mês do ano passado, a meta informada representa ${
         yoy >= 0 ? "um crescimento" : "uma queda"
       } de ${Math.abs(yoy).toFixed(1).replace(".", ",")}%.`,
     );
   }
   if (vs3 !== null) {
     explanationParts.push(
-      `Comparada à média dos últimos 3 meses, fica ${Math.abs(vs3).toFixed(1).replace(".", ",")}% ${
+      `Comparada à média dos últimos 3 meses, a meta informada fica ${Math.abs(vs3).toFixed(1).replace(".", ",")}% ${
         vs3 >= 0 ? "acima" : "abaixo"
       }.`,
     );
@@ -334,8 +339,8 @@ export function MetaGerencialPage() {
 
   const selectedCycle = cycles.find((c) => c.id === selectedCycleId) ?? null;
   const totalSuggestedKg = useMemo(() => suggestions.reduce((sum, s) => sum + s.suggested_kg, 0), [suggestions]);
-  const overallYoyPct = useMemo(() => aggregateYoyPct(suggestions), [suggestions]);
-  const overallVs3MonthsPct = useMemo(() => aggregateVs3MonthsPct(suggestions), [suggestions]);
+  const overallYoyPct = useMemo(() => aggregateYoyPct(suggestions, edits), [suggestions, edits]);
+  const overallVs3MonthsPct = useMemo(() => aggregateVs3MonthsPct(suggestions, edits), [suggestions, edits]);
   const totalEditedKg = useMemo(
     () =>
       suggestions.reduce(
@@ -416,9 +421,9 @@ export function MetaGerencialPage() {
           <div className="mg-kpi-row">
             <div className="mg-kpi-card">
               <div className="mg-kpi-text">
-                <span className="mg-kpi-label">META SUGERIDA</span>
-                <span className="mg-kpi-value">{formatKg(totalSuggestedKg)}</span>
-                <span className="mg-kpi-caption">Soma das sugestões</span>
+                <span className="mg-kpi-label">META TOTAL</span>
+                <span className="mg-kpi-value">{formatKg(totalEditedKg)}</span>
+                <span className="mg-kpi-caption">Soma dos valores informados</span>
               </div>
             </div>
             <div className="mg-kpi-card">
@@ -464,8 +469,8 @@ export function MetaGerencialPage() {
 
           <div className="mg-footer">
             <div className="mg-footer-total">
-              <span className="mg-footer-total-label">Total das metas</span>
-              <span className="mg-footer-total-value">{totalEditedKg.toLocaleString("pt-BR")} kg</span>
+              <span className="mg-footer-total-label">Meta sugerida (total)</span>
+              <span className="mg-footer-total-value">{totalSuggestedKg.toLocaleString("pt-BR")} kg</span>
             </div>
             <div className="mg-footer-actions">
               <button type="button" className="mg-btn-outline" onClick={() => navigate("/distribuicao/distribuir")}>

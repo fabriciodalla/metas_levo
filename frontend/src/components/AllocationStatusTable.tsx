@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Fragment, useState } from "react";
 import { Badge } from "./ui/Badge";
+import { EmptyState } from "./ui/EmptyState";
 
 export interface AllocationStatusItem {
   id: number;
@@ -133,6 +134,29 @@ function StatusBadge({ distributedCount, totalCount }: { distributedCount: numbe
   return <Badge variant="warning">{`${distributedCount}/${totalCount} distribuídos`}</Badge>;
 }
 
+type LevelFilter = "ALL" | "REGIONAL" | "LOCAL" | "SUPERVISOR";
+type StatusFilter = "ALL" | "DISTRIBUTED" | "PARTIAL" | "PENDING";
+
+const LEVEL_FILTER_LABELS: Record<LevelFilter, string> = {
+  ALL: "Todos os níveis",
+  REGIONAL: "Coordenador Regional",
+  LOCAL: "Coordenador Local",
+  SUPERVISOR: "Supervisor",
+};
+
+const STATUS_FILTER_LABELS: Record<StatusFilter, string> = {
+  ALL: "Todos os status",
+  DISTRIBUTED: "Distribuído",
+  PARTIAL: "Parcial",
+  PENDING: "Pendente",
+};
+
+function ownerStatus(owner: OwnerRow): StatusFilter {
+  if (owner.distributedCount === owner.totalCount) return "DISTRIBUTED";
+  if (owner.distributedCount === 0) return "PENDING";
+  return "PARTIAL";
+}
+
 // Uma linha por usuário/nó, verde/vermelho (ou parcial) conforme já distribuiu ou não pros
 // subordinados dele, com a data em que recebeu a meta e a data em que efetuou a distribuição —
 // mesmo mecanismo de agrupamento por dono/grupo do PendingAllocationsTable, mas cobrindo todo
@@ -140,6 +164,14 @@ function StatusBadge({ distributedCount, totalCount }: { distributedCount: numbe
 export function AllocationStatusTable({ items }: { items: AllocationStatusItem[] }) {
   const owners = groupByOwner(items);
   const [openOwners, setOpenOwners] = useState<Set<number>>(new Set());
+  const [levelFilter, setLevelFilter] = useState<LevelFilter>("ALL");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+
+  const filteredOwners = owners.filter((owner) => {
+    if (levelFilter !== "ALL" && owner.ownerNodeLevel !== levelFilter) return false;
+    if (statusFilter !== "ALL" && ownerStatus(owner) !== statusFilter) return false;
+    return true;
+  });
 
   function toggle(ownerNodeId: number) {
     setOpenOwners((prev) => {
@@ -151,82 +183,128 @@ export function AllocationStatusTable({ items }: { items: AllocationStatusItem[]
   }
 
   return (
-    <div className="table-wrap">
-      <table className="table pending-table">
-        <thead>
-          <tr>
-            <th aria-hidden="true" />
-            <th>Usuário(s)</th>
-            <th>Nível</th>
-            <th>Status</th>
-            <th>Meta total</th>
-            <th>Recebido em</th>
-            <th>Distribuído em</th>
-          </tr>
-        </thead>
-        <tbody>
-          {owners.map((owner) => {
-            const isOpen = openOwners.has(owner.ownerNodeId);
-            return (
-              <Fragment key={owner.ownerNodeId}>
-                <tr className="pending-row-summary" onClick={() => toggle(owner.ownerNodeId)}>
-                  <td className="pending-row-toggle">
-                    {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                  </td>
-                  <td>
-                    {owner.ownerNodeUsernames.length > 0 ? (
-                      owner.ownerNodeUsernames.join(", ")
-                    ) : (
-                      <Badge variant="neutral">sem usuário vinculado</Badge>
+    <div>
+      <div className="filter-bar allocation-status-filters">
+        <div className="field-inline">
+          <label className="field-label" htmlFor="allocation-status-level-filter">
+            Nível
+          </label>
+          <select
+            id="allocation-status-level-filter"
+            value={levelFilter}
+            onChange={(e) => setLevelFilter(e.target.value as LevelFilter)}
+          >
+            {(Object.keys(LEVEL_FILTER_LABELS) as LevelFilter[]).map((key) => (
+              <option key={key} value={key}>
+                {LEVEL_FILTER_LABELS[key]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field-inline">
+          <label className="field-label" htmlFor="allocation-status-status-filter">
+            Status
+          </label>
+          <select
+            id="allocation-status-status-filter"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+          >
+            {(Object.keys(STATUS_FILTER_LABELS) as StatusFilter[]).map((key) => (
+              <option key={key} value={key}>
+                {STATUS_FILTER_LABELS[key]}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {filteredOwners.length === 0 ? (
+        <EmptyState>Nenhum resultado para os filtros selecionados.</EmptyState>
+      ) : (
+        <div className="table-wrap">
+          <table className="table pending-table">
+            <thead>
+              <tr>
+                <th aria-hidden="true" />
+                <th>Usuário(s)</th>
+                <th>Nível</th>
+                <th>Status</th>
+                <th>Meta total</th>
+                <th>Recebido em</th>
+                <th>Distribuído em</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredOwners.map((owner) => {
+                const isOpen = openOwners.has(owner.ownerNodeId);
+                return (
+                  <Fragment key={owner.ownerNodeId}>
+                    <tr className="pending-row-summary" onClick={() => toggle(owner.ownerNodeId)}>
+                      <td className="pending-row-toggle">
+                        {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                      </td>
+                      <td>
+                        {owner.ownerNodeUsernames.length > 0 ? (
+                          owner.ownerNodeUsernames.join(", ")
+                        ) : (
+                          <Badge variant="neutral">sem usuário vinculado</Badge>
+                        )}
+                      </td>
+                      <td>{owner.ownerNodeLevel}</td>
+                      <td>
+                        <StatusBadge distributedCount={owner.distributedCount} totalCount={owner.totalCount} />
+                      </td>
+                      <td>{formatKg(owner.totalKg)}</td>
+                      <td>{formatDate(owner.receivedAt)}</td>
+                      <td>{owner.distributedAt ? formatDate(owner.distributedAt) : "—"}</td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="pending-row-detail">
+                        <td />
+                        <td colSpan={6}>
+                          <table className="pending-detail-table">
+                            <thead>
+                              <tr>
+                                <th>Grupo</th>
+                                <th>Status</th>
+                                <th>Meta (kg)</th>
+                                <th>Recebido em</th>
+                                <th>Distribuído em</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {owner.groupRows.map((row) => (
+                                <tr key={row.groupNome}>
+                                  <td>
+                                    {row.groupNome}
+                                    {row.totalCount > 1 && (
+                                      <Badge variant="neutral"> {row.totalCount} subgrupos</Badge>
+                                    )}
+                                  </td>
+                                  <td>
+                                    <StatusBadge
+                                      distributedCount={row.distributedCount}
+                                      totalCount={row.totalCount}
+                                    />
+                                  </td>
+                                  <td>{formatKg(row.totalKg)}</td>
+                                  <td>{formatDate(row.receivedAt)}</td>
+                                  <td>{row.distributedAt ? formatDate(row.distributedAt) : "—"}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </td>
+                      </tr>
                     )}
-                  </td>
-                  <td>{owner.ownerNodeLevel}</td>
-                  <td>
-                    <StatusBadge distributedCount={owner.distributedCount} totalCount={owner.totalCount} />
-                  </td>
-                  <td>{formatKg(owner.totalKg)}</td>
-                  <td>{formatDate(owner.receivedAt)}</td>
-                  <td>{owner.distributedAt ? formatDate(owner.distributedAt) : "—"}</td>
-                </tr>
-                {isOpen && (
-                  <tr className="pending-row-detail">
-                    <td />
-                    <td colSpan={6}>
-                      <table className="pending-detail-table">
-                        <thead>
-                          <tr>
-                            <th>Grupo</th>
-                            <th>Status</th>
-                            <th>Meta (kg)</th>
-                            <th>Recebido em</th>
-                            <th>Distribuído em</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {owner.groupRows.map((row) => (
-                            <tr key={row.groupNome}>
-                              <td>
-                                {row.groupNome}
-                                {row.totalCount > 1 && <Badge variant="neutral"> {row.totalCount} subgrupos</Badge>}
-                              </td>
-                              <td>
-                                <StatusBadge distributedCount={row.distributedCount} totalCount={row.totalCount} />
-                              </td>
-                              <td>{formatKg(row.totalKg)}</td>
-                              <td>{formatDate(row.receivedAt)}</td>
-                              <td>{row.distributedAt ? formatDate(row.distributedAt) : "—"}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

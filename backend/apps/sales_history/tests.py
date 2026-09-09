@@ -7,9 +7,18 @@ from unittest.mock import MagicMock, patch
 from django.db import connections
 from django.test import SimpleTestCase, TestCase, TransactionTestCase
 
+from apps.catalog.models import ExternalProductMapping, ProductGroup, ProductSubgroup
+from apps.hierarchy.models import ExternalSalespersonMapping, FeristaCoverage, HierarchyNode
+
 from .models import AccumulatedSale, ClientPortfolioSnapshot, DistributionBaseline
 from .queries import ACUMULADO_SQL, CARTEIRA_SQL
-from .services import DistributionBaselineService, SalesHistorySyncService, sync_lock
+from .services import (
+    DistributionBaselineService,
+    SalesHistorySyncService,
+    VendorGroupSummaryService,
+    VendorSubgroupExportService,
+    sync_lock,
+)
 
 
 def _mock_cursor(mock_connections, columns, rows):
@@ -306,6 +315,236 @@ class DistributionBaselineServiceTests(TestCase):
         )
 
 
+class DistributionBaselineServiceFeristaCoverageTests(TestCase):
+    """Extensão da Decisão 13 (2026-08-28): a reconstrução já entrega o volume do ferista
+    redirecionado pro titular no mês corrente da reconstrução, sem depender do redirecionamento
+    avulso de `SalesHistoryProvider.target_history` — necessário pra telas que leem
+    `DistributionBaseline` direto, como `VendorGroupSummaryService`."""
+
+    def setUp(self):
+        self.titular = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Titular")
+        ExternalSalespersonMapping.objects.create(
+            external_name="Titular Externo", hierarchy_node=self.titular
+        )
+
+        ClientPortfolioSnapshot.objects.create(
+            client_code=1, client_name="Cliente A", salesperson_name="Ferista Externo", nk_supervisor="B.F.1"
+        )
+        AccumulatedSale.objects.create(
+            nk_supervisor="B.F.1",
+            nk_vendedor="B.F.FERISTA",
+            salesperson_name="Ferista Externo",
+            client_code=1,
+            sale_date=date(2026, 8, 10),
+            subgroup_name="Linguica",
+            total_quantity=Decimal("40"),
+            total_value=Decimal("400"),
+        )
+
+    def test_rebuild_redirects_current_month_ferista_volume_to_titular(self):
+        FeristaCoverage.objects.create(
+            external_name="Ferista Externo", covered_node=self.titular, ano=2026, mes=8
+        )
+
+        DistributionBaselineService.rebuild(today=date(2026, 8, 28))
+
+        self.assertFalse(DistributionBaseline.objects.filter(salesperson_name="Ferista Externo").exists())
+        linguica = DistributionBaseline.objects.get(subgroup_name="Linguica")
+        self.assertEqual(linguica.salesperson_name, "Titular Externo")
+        self.assertEqual(linguica.total_quantity, Decimal("40"))
+
+    def test_rebuild_ignores_ferista_coverage_registered_for_other_months(self):
+        # Cobertura cadastrada pra julho e setembro — o mês atual da reconstrução (agosto) não
+        # tem cobertura própria, então o volume do ferista fica sem titular, igual qualquer nome
+        # sem `ExternalSalespersonMapping`.
+        FeristaCoverage.objects.create(
+            external_name="Ferista Externo", covered_node=self.titular, ano=2026, mes=7
+        )
+        FeristaCoverage.objects.create(
+            external_name="Ferista Externo", covered_node=self.titular, ano=2026, mes=9
+        )
+
+        DistributionBaselineService.rebuild(today=date(2026, 8, 28))
+
+        self.assertTrue(DistributionBaseline.objects.filter(salesperson_name="Ferista Externo").exists())
+        self.assertFalse(DistributionBaseline.objects.filter(salesperson_name="Titular Externo").exists())
+
+    def test_rebuild_does_not_redirect_ferista_volume_outside_current_month(self):
+        AccumulatedSale.objects.all().delete()
+        AccumulatedSale.objects.create(
+            nk_supervisor="B.F.1",
+            nk_vendedor="B.F.FERISTA",
+            salesperson_name="Ferista Externo",
+            client_code=1,
+            sale_date=date(2026, 7, 10),
+            subgroup_name="Linguica",
+            total_quantity=Decimal("40"),
+            total_value=Decimal("400"),
+        )
+        FeristaCoverage.objects.create(
+            external_name="Ferista Externo", covered_node=self.titular, ano=2026, mes=8
+        )
+
+        DistributionBaselineService.rebuild(today=date(2026, 8, 28))
+
+        self.assertTrue(DistributionBaseline.objects.filter(salesperson_name="Ferista Externo").exists())
+        self.assertFalse(DistributionBaseline.objects.filter(salesperson_name="Titular Externo").exists())
+
+
+class VendorGroupSummaryServiceTests(TestCase):
+    def setUp(self):
+        self.embutidos = ProductGroup.objects.create(nome="Embutidos")
+        linguica = ProductSubgroup.objects.create(nome="Linguica", group=self.embutidos)
+        ExternalProductMapping.objects.create(external_code="LINGUICA_COD", subgroup=linguica)
+
+        gerente = HierarchyNode.objects.create(level=HierarchyNode.Level.GERENTE, nome="Gerente")
+        regional = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.REGIONAL, nome="Regional", parent=gerente
+        )
+        self.local = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.LOCAL, nome="Local Sul", parent=regional
+        )
+        self.supervisor = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.SUPERVISOR, nome="Supervisor A", parent=self.local
+        )
+
+        self.joao = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.VENDEDOR, nome="Joao", ativo=True, parent=self.supervisor
+        )
+        ExternalSalespersonMapping.objects.create(external_name="Joao", hierarchy_node=self.joao)
+
+        self.maria = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.VENDEDOR, nome="Maria", ativo=True
+        )
+        # Maria não tem ExternalSalespersonMapping — simula quem falta na sincronização.
+
+        HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Inativo", ativo=False)
+
+        # Dentro da janela dos últimos 3 meses (jun/jul/ago de 2026).
+        for mes, qty in ((6, 30), (7, 60), (8, 90)):
+            DistributionBaseline.objects.create(
+                ano=2026, mes=mes, salesperson_name="Joao", subgroup_name="LINGUICA_COD", total_quantity=qty
+            )
+        # Dentro dos 12 meses, mas fora dos últimos 3.
+        DistributionBaseline.objects.create(
+            ano=2025, mes=9, salesperson_name="Joao", subgroup_name="LINGUICA_COD", total_quantity=120
+        )
+        # Fora da janela de 12 meses (deve ser ignorado).
+        DistributionBaseline.objects.create(
+            ano=2025, mes=1, salesperson_name="Joao", subgroup_name="LINGUICA_COD", total_quantity=999
+        )
+        # Subgrupo sem mapeamento pro catálogo interno (deve ser ignorado, igual ao resto do produto).
+        DistributionBaseline.objects.create(
+            ano=2026, mes=8, salesperson_name="Joao", subgroup_name="SEM_MAPEAMENTO", total_quantity=50
+        )
+
+    def test_computes_3_and_12_month_averages_per_vendor_and_group(self):
+        result = VendorGroupSummaryService.summary(today=date(2026, 8, 15))
+
+        self.assertEqual(result["grupos"], [{"id": self.embutidos.id, "nome": "Embutidos"}])
+
+        joao_row = next(v for v in result["vendedores"] if v["id"] == self.joao.id)
+        self.assertTrue(joao_row["mapeado"])
+        self.assertEqual(
+            joao_row["totals"],
+            [{"grupo_id": self.embutidos.id, "avg_3_months_kg": 60.0, "avg_12_months_kg": 25.0}],
+        )
+
+    def test_includes_local_and_supervisor_ancestry(self):
+        result = VendorGroupSummaryService.summary(today=date(2026, 8, 15))
+
+        joao_row = next(v for v in result["vendedores"] if v["id"] == self.joao.id)
+        self.assertEqual(joao_row["local_id"], self.local.id)
+        self.assertEqual(joao_row["local_nome"], "Local Sul")
+        self.assertEqual(joao_row["supervisor_id"], self.supervisor.id)
+        self.assertEqual(joao_row["supervisor_nome"], "Supervisor A")
+
+    def test_flags_active_vendor_without_external_mapping(self):
+        result = VendorGroupSummaryService.summary(today=date(2026, 8, 15))
+
+        maria_row = next(v for v in result["vendedores"] if v["id"] == self.maria.id)
+        self.assertFalse(maria_row["mapeado"])
+        self.assertEqual(
+            maria_row["totals"],
+            [{"grupo_id": self.embutidos.id, "avg_3_months_kg": 0.0, "avg_12_months_kg": 0.0}],
+        )
+
+    def test_excludes_inactive_vendedores(self):
+        result = VendorGroupSummaryService.summary(today=date(2026, 8, 15))
+
+        self.assertNotIn("Inativo", [v["nome"] for v in result["vendedores"]])
+
+
+class VendorSubgroupExportServiceTests(TestCase):
+    def setUp(self):
+        self.embutidos = ProductGroup.objects.create(nome="Embutidos")
+        linguica = ProductSubgroup.objects.create(nome="Linguica", group=self.embutidos)
+        ExternalProductMapping.objects.create(external_code="LINGUICA_COD", subgroup=linguica)
+
+        gerente = HierarchyNode.objects.create(level=HierarchyNode.Level.GERENTE, nome="Gerente")
+        self.regional = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.REGIONAL, nome="Regional", parent=gerente
+        )
+        self.local = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.LOCAL, nome="Local Sul", parent=self.regional
+        )
+        supervisor = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.SUPERVISOR, nome="Supervisor A", parent=self.local
+        )
+        self.joao = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.VENDEDOR, nome="Joao", ativo=True, parent=supervisor
+        )
+        ExternalSalespersonMapping.objects.create(external_name="Joao", hierarchy_node=self.joao)
+
+        self.maria = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.VENDEDOR, nome="Maria", ativo=True
+        )
+        # Maria não tem ExternalSalespersonMapping — simula quem falta na sincronização.
+
+        # Dentro da janela dos últimos 3 meses (jun/jul/ago de 2026).
+        for mes, qty in ((6, 30), (7, 60), (8, 90)):
+            DistributionBaseline.objects.create(
+                ano=2026, mes=mes, salesperson_name="Joao", subgroup_name="LINGUICA_COD", total_quantity=qty
+            )
+        # Dentro dos 12 meses, mas fora dos últimos 3.
+        DistributionBaseline.objects.create(
+            ano=2025, mes=9, salesperson_name="Joao", subgroup_name="LINGUICA_COD", total_quantity=120
+        )
+
+    def test_sums_and_averages_are_grouped_by_calendar_month_not_by_row_count(self):
+        rows = VendorSubgroupExportService.rows(today=date(2026, 8, 15))
+
+        joao_row = next(r for r in rows if r.vendedor_nome == "Joao")
+        self.assertEqual(joao_row.regional_nome, "Regional")
+        self.assertEqual(joao_row.local_nome, "Local Sul")
+        self.assertEqual(joao_row.subgrupo_nome, "Linguica")
+        # Soma dos 3 meses (30+60+90=180) / 3 meses — não / quantidade de linhas somadas.
+        self.assertEqual(joao_row.sum_3_months_kg, 180)
+        self.assertEqual(joao_row.avg_3_months_kg, 60.0)
+        # Soma dos 12 meses (180+120=300) / 12 meses.
+        self.assertEqual(joao_row.sum_12_months_kg, 300)
+        self.assertEqual(joao_row.avg_12_months_kg, 25.0)
+
+    def test_excludes_rows_without_any_sale_in_the_last_12_months(self):
+        # Maria não tem ExternalSalespersonMapping (sem histórico algum) e por isso não deve
+        # aparecer — pedido do usuário (2026-09-04): a base completa não traz combinação
+        # vendedor/subgrupo com média 12 meses <= 0.
+        rows = VendorSubgroupExportService.rows(today=date(2026, 8, 15))
+
+        self.assertNotIn("Maria", [r.vendedor_nome for r in rows])
+
+    def test_excludes_subgroup_with_zero_sales_in_the_last_12_months(self):
+        DistributionBaseline.objects.create(
+            ano=2026, mes=8, salesperson_name="Joao", subgroup_name="SEM_VENDA_12M", total_quantity=0
+        )
+        outro_subgrupo = ProductSubgroup.objects.create(nome="Outro", group=self.embutidos)
+        ExternalProductMapping.objects.create(external_code="SEM_VENDA_12M", subgroup=outro_subgrupo)
+
+        rows = VendorSubgroupExportService.rows(today=date(2026, 8, 15))
+
+        self.assertNotIn("Outro", [r.subgrupo_nome for r in rows])
+
+
 class SalesHistoryReadOnlyGuaranteeTests(SimpleTestCase):
     """Trava a regra do CLAUDE.md: acesso ao Postgres externo de histórico de vendas é
     somente leitura. Se alguém introduzir um DML nas queries verbatim, este teste quebra
@@ -326,3 +565,30 @@ class SalesHistoryReadOnlyGuaranteeTests(SimpleTestCase):
 
     def test_carteira_sql_has_no_write_statements(self):
         self._assert_no_write_statements(CARTEIRA_SQL, "CARTEIRA_SQL")
+
+
+class SalesHistorySqlSyntaxTests(SimpleTestCase):
+    """Bug real (2026-08-07): editar a lista de `nk_supervisor` verbatim sem vírgula entre dois
+    literais adjacentes não quebra nada visível na edição — em Postgres, `'B.F.253''B.F.290'` é
+    UM literal só (`''` escapa uma aspa dentro da string), não dois separados por vírgula
+    faltando. Só ia acusar erro na hora de o sync rodar contra o banco real. Nenhuma string usada
+    aqui precisa de aspa escapada, então `''` em qualquer lugar do SQL é sempre sinal desse bug.
+    """
+
+    def test_acumulado_sql_has_no_missing_comma_between_literals(self):
+        self.assertNotIn("''", ACUMULADO_SQL)
+
+    def test_carteira_sql_has_no_missing_comma_between_literals(self):
+        self.assertNotIn("''", CARTEIRA_SQL)
+
+    def test_acumulado_sql_includes_new_supervisors(self):
+        for code in ("B.F.290", "B.F.214"):
+            self.assertIn(f"'{code}'", ACUMULADO_SQL)
+
+    def test_carteira_sql_ms_supervisor_list_has_no_duplicate_and_includes_new_supervisors(self):
+        match = re.search(r"nk_supervisor IN \(([^)]+)\)\s*AND endereco\.sg_estado = 'MS'", CARTEIRA_SQL)
+        self.assertIsNotNone(match, "não achou a lista de supervisores de MS em CARTEIRA_SQL")
+        codes = [code.strip().strip("'") for code in match.group(1).split(",")]
+        self.assertEqual(len(codes), len(set(codes)), f"lista de MS tem código duplicado: {codes}")
+        self.assertIn("B.F.290", codes)
+        self.assertIn("B.F.214", codes)
