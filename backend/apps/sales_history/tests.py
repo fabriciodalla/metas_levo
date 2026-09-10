@@ -398,11 +398,8 @@ class VendorGroupSummaryServiceTests(TestCase):
         ExternalProductMapping.objects.create(external_code="LINGUICA_COD", subgroup=linguica)
 
         gerente = HierarchyNode.objects.create(level=HierarchyNode.Level.GERENTE, nome="Gerente")
-        regional = HierarchyNode.objects.create(
-            level=HierarchyNode.Level.REGIONAL, nome="Regional", parent=gerente
-        )
         self.local = HierarchyNode.objects.create(
-            level=HierarchyNode.Level.LOCAL, nome="Local Sul", parent=regional
+            level=HierarchyNode.Level.LOCAL, nome="Local Sul", parent=gerente
         )
         self.supervisor = HierarchyNode.objects.create(
             level=HierarchyNode.Level.SUPERVISOR, nome="Supervisor A", parent=self.local
@@ -482,11 +479,8 @@ class VendorSubgroupExportServiceTests(TestCase):
         ExternalProductMapping.objects.create(external_code="LINGUICA_COD", subgroup=linguica)
 
         gerente = HierarchyNode.objects.create(level=HierarchyNode.Level.GERENTE, nome="Gerente")
-        self.regional = HierarchyNode.objects.create(
-            level=HierarchyNode.Level.REGIONAL, nome="Regional", parent=gerente
-        )
         self.local = HierarchyNode.objects.create(
-            level=HierarchyNode.Level.LOCAL, nome="Local Sul", parent=self.regional
+            level=HierarchyNode.Level.LOCAL, nome="Local Sul", parent=gerente
         )
         supervisor = HierarchyNode.objects.create(
             level=HierarchyNode.Level.SUPERVISOR, nome="Supervisor A", parent=self.local
@@ -515,7 +509,6 @@ class VendorSubgroupExportServiceTests(TestCase):
         rows = VendorSubgroupExportService.rows(today=date(2026, 8, 15))
 
         joao_row = next(r for r in rows if r.vendedor_nome == "Joao")
-        self.assertEqual(joao_row.regional_nome, "Regional")
         self.assertEqual(joao_row.local_nome, "Local Sul")
         self.assertEqual(joao_row.subgrupo_nome, "Linguica")
         # Soma dos 3 meses (30+60+90=180) / 3 meses — não / quantidade de linhas somadas.

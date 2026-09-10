@@ -154,8 +154,8 @@ class UserAccountApiTests(APITestCase):
         — dependendo da ordem física de inserção no M2M, a posição "principal" podia vir
         diferente do esperado. `.by_seniority()` decide isso hoje (2026-08-07: por senioridade de
         cargo, não por `id`, ver `test_promoting_someone_...`), mas aqui os dois nós têm níveis
-        diferentes E ordem de criação alinhada com a senioridade (REGIONAL é mais antigo e mais
-        sênior que LOCAL) — então este teste continua cobrindo especificamente o bug original do
+        diferentes E ordem de criação alinhada com a senioridade (LOCAL é mais antigo e mais
+        sênior que SUPERVISOR) — então este teste continua cobrindo especificamente o bug original do
         M2M sem ordering, com `id` como critério de desempate."""
         self.client.force_login(self.admin)
         older_node = HierarchyNode.objects.create(
@@ -191,11 +191,8 @@ class UserAccountApiTests(APITestCase):
         esse PATCH vira um no-op sobre o nó que já é Coordenador Local, e o Supervisor sobra livre
         pra ser removido via "Outros cargos" (o que a promoção de verdade pedia)."""
         self.client.force_login(self.admin)
-        regional_node = HierarchyNode.objects.create(
-            level=HierarchyNode.Level.REGIONAL, nome="Chefe", parent=self.node
-        )
         local_node = HierarchyNode.objects.create(
-            level=HierarchyNode.Level.LOCAL, nome="Alvo", parent=regional_node
+            level=HierarchyNode.Level.LOCAL, nome="Alvo", parent=self.node
         )
         supervisor_node = HierarchyNode.objects.create(
             level=HierarchyNode.Level.SUPERVISOR, nome="Alvo", parent=local_node
@@ -205,7 +202,7 @@ class UserAccountApiTests(APITestCase):
 
         response = self.client.patch(
             reverse("user-account-detail", args=[target.id]),
-            {"level": HierarchyNode.Level.LOCAL, "parent_node_id": regional_node.id},
+            {"level": HierarchyNode.Level.LOCAL, "parent_node_id": self.node.id},
             format="json",
         )
 
@@ -225,11 +222,8 @@ class UserAccountApiTests(APITestCase):
         um nível/superior que colide com uma posição extra JÚNIOR ainda reparentaria o nó
         principal (mais sênior) por cima da extra, então essa trava continua necessária."""
         self.client.force_login(self.admin)
-        regional_node = HierarchyNode.objects.create(
-            level=HierarchyNode.Level.REGIONAL, nome="Chefe", parent=self.node
-        )
         local_node = HierarchyNode.objects.create(
-            level=HierarchyNode.Level.LOCAL, nome="Alvo", parent=regional_node
+            level=HierarchyNode.Level.LOCAL, nome="Alvo", parent=self.node
         )
         target = User.objects.create_user(username="Alvo", password="x", hierarchy_node=local_node)
         supervisor_node = HierarchyNode.objects.create(
@@ -248,7 +242,7 @@ class UserAccountApiTests(APITestCase):
         local_node.refresh_from_db()
         supervisor_node.refresh_from_db()
         self.assertEqual(local_node.level, HierarchyNode.Level.LOCAL)
-        self.assertEqual(local_node.parent_id, regional_node.id)
+        self.assertEqual(local_node.parent_id, self.node.id)
         self.assertEqual(supervisor_node.level, HierarchyNode.Level.SUPERVISOR)
         self.assertTrue(supervisor_node.ativo)
 

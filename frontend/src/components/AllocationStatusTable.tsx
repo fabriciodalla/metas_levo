@@ -134,12 +134,11 @@ function StatusBadge({ distributedCount, totalCount }: { distributedCount: numbe
   return <Badge variant="warning">{`${distributedCount}/${totalCount} distribuídos`}</Badge>;
 }
 
-type LevelFilter = "ALL" | "REGIONAL" | "LOCAL" | "SUPERVISOR";
+type LevelFilter = "ALL" | "LOCAL" | "SUPERVISOR";
 type StatusFilter = "ALL" | "DISTRIBUTED" | "PARTIAL" | "PENDING";
 
 const LEVEL_FILTER_LABELS: Record<LevelFilter, string> = {
   ALL: "Todos os níveis",
-  REGIONAL: "Coordenador Regional",
   LOCAL: "Coordenador Local",
   SUPERVISOR: "Supervisor",
 };

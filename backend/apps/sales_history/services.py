@@ -270,7 +270,6 @@ class VendorGroupSummaryService:
 
 @dataclass(frozen=True)
 class VendorSubgroupExportRow:
-    regional_nome: str
     local_nome: str
     vendedor_nome: str
     subgrupo_nome: str
@@ -284,7 +283,7 @@ class VendorSubgroupExportService:
     """CSV completo (Pré-processamento, "Resumo por vendedor e grupo"): mesma base de
     `VendorGroupSummaryService`, mas por SUBGRUPO em vez de grupo, com soma além da média — pedido
     do usuário pra auditar o dado bruto por trás das médias mostradas na tela, incluindo a
-    ancestralidade até Coordenador Regional (a tela só mostra até Coordenador Local/Supervisor).
+    ancestralidade até Coordenador Local (a tela só mostra até Supervisor).
 
     Soma e média usam sempre o mesmo divisor fixo (3 ou 12 meses) — não a quantidade de linhas que
     contribuíram pra soma —, igual a `VendorGroupSummaryService`: um subgrupo sem venda num mês
@@ -299,7 +298,7 @@ class VendorSubgroupExportService:
 
         vendedores = list(
             HierarchyNode.objects.filter(level=HierarchyNode.Level.VENDEDOR, ativo=True)
-            .select_related("parent__parent__parent")
+            .select_related("parent__parent")
             .order_by("nome")
         )
         name_to_node_id: dict[str, int] = dict(
@@ -341,8 +340,6 @@ class VendorSubgroupExportService:
         for vendedor in vendedores:
             supervisor = vendedor.parent
             local = supervisor.parent if supervisor else None
-            regional = local.parent if local else None
-            regional_nome = regional.nome if regional else ""
             local_nome = local.nome if local else ""
 
             for subgrupo_nome in sorted(subgrupos_by_vendedor.get(vendedor.id, [])):
@@ -351,7 +348,6 @@ class VendorSubgroupExportService:
                     continue
                 result.append(
                     VendorSubgroupExportRow(
-                        regional_nome=regional_nome,
                         local_nome=local_nome,
                         vendedor_nome=vendedor.nome,
                         subgrupo_nome=subgrupo_nome,

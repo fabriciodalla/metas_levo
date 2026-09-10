@@ -66,7 +66,7 @@ class VendorGroupSummaryView(APIView):
 
 class VendorSubgroupExportView(APIView):
     """CSV completo por Vendedor x Subgrupo (soma e média de 3/12 meses), com a ancestralidade até
-    Coordenador Regional — ver `VendorSubgroupExportService`."""
+    Coordenador Local — ver `VendorSubgroupExportService`."""
 
     permission_classes = [IsAuthenticated, IsAppAdmin]
 
@@ -78,7 +78,6 @@ class VendorSubgroupExportView(APIView):
         writer = csv.writer(buffer)
         writer.writerow(
             [
-                "coordenador_regional",
                 "coordenador_local",
                 "vendedor",
                 "subgrupo",
@@ -91,7 +90,6 @@ class VendorSubgroupExportView(APIView):
         for row in rows:
             writer.writerow(
                 [
-                    row.regional_nome,
                     row.local_nome,
                     row.vendedor_nome,
                     row.subgrupo_nome,

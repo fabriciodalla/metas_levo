@@ -402,7 +402,7 @@ export function SubgroupCascadeWorkspace({ ownerLevel, noAccessMessage, targetLa
   const workspaceTotal = selectedAllocation ? distribuidoFor(selectedAllocation) : 0;
   const workspaceDiff = selectedAllocation ? selectedAllocation.quantity_kg - workspaceTotal : 0;
   const groupHasDraft = groupDraft.hasAnyDraft(subgroupsInGroup);
-  // Regra já estipulada nas outras telas de distribuição (Gerente→Regional, Regional→Local): só
+  // Regra já estipulada nas outras telas de distribuição (Gerente→Local): só
   // libera "Salvar distribuição" quando TODO subgrupo do grupo (com meta > 0) tem todos os alvos
   // preenchidos e fecha exato com a meta — nem mais, nem menos, e nem só os que a pessoa abriu
   // (ver `canSaveGroup`); equivale a exigir "Restante total" (rodapé da lateral) zerado.

@@ -211,7 +211,7 @@ class GoalAllocationApiTests(APITestCase):
         deve travar o botão "Resetar distribuição" do pai (revisão 2026-09-03)."""
         GoalAllocation.objects.create(
             cycle=self.cycle,
-            owner_node=self.regional_a,
+            owner_node=self.local_a,
             parent_allocation=self.allocation,
             granularity=GoalAllocation.Granularity.GROUP,
             group=self.group,
@@ -229,7 +229,7 @@ class GoalAllocationApiTests(APITestCase):
     def test_has_further_distribution_still_blocks_on_a_real_distributed_child(self):
         GoalAllocation.objects.create(
             cycle=self.cycle,
-            owner_node=self.regional_a,
+            owner_node=self.local_a,
             parent_allocation=self.allocation,
             granularity=GoalAllocation.Granularity.GROUP,
             group=self.group,
@@ -249,7 +249,7 @@ class GoalAllocationApiTests(APITestCase):
         nome) recebe um repasse automático COM quantidade real — não só 0 kg — e isso também não
         é decisão de ninguém (só existe 1 alvo possível), então não deve travar o reset do pai."""
         local = HierarchyNode.objects.create(
-            level=HierarchyNode.Level.LOCAL, nome="Local", parent=self.regional_a
+            level=HierarchyNode.Level.LOCAL, nome="Local", parent=self.gerente
         )
         supervisor = HierarchyNode.objects.create(
             level=HierarchyNode.Level.SUPERVISOR, nome="Fulano Da Silva", parent=local

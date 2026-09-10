@@ -24,11 +24,8 @@ class SelfVendedorAutoDistributionTests(TestCase):
         self.cycle = Cycle.objects.create(ano=2026, mes=7)
 
         self.gerente = HierarchyNode.objects.create(level=HierarchyNode.Level.GERENTE, nome="Gerente")
-        self.regional = HierarchyNode.objects.create(
-            level=HierarchyNode.Level.REGIONAL, nome="Regional", parent=self.gerente
-        )
         self.local = HierarchyNode.objects.create(
-            level=HierarchyNode.Level.LOCAL, nome="Local", parent=self.regional
+            level=HierarchyNode.Level.LOCAL, nome="Local", parent=self.gerente
         )
         self.coordenador = User.objects.create_user(username="coord", password="x", hierarchy_node=self.local)
 
@@ -167,25 +164,23 @@ class SelfVendedorAutoDistributionTests(TestCase):
         )
 
     def test_does_not_cascade_for_non_supervisor_targets(self):
-        """Regional->Local, por exemplo: o filho recém-criado é dono de um nó LOCAL, não
+        """Gerente->Local, por exemplo: o filho recém-criado é dono de um nó LOCAL, não
         SUPERVISOR — a autogestão nunca se aplica fora do nível Supervisor."""
         local_b = HierarchyNode.objects.create(
-            level=HierarchyNode.Level.LOCAL, nome="Local B", parent=self.regional
+            level=HierarchyNode.Level.LOCAL, nome="Local B", parent=self.gerente
         )
-        regional_allocation = GoalAllocation.objects.create(
+        gerente_allocation = GoalAllocation.objects.create(
             cycle=self.cycle,
-            owner_node=self.regional,
+            owner_node=self.gerente,
             granularity=GoalAllocation.Granularity.SUBGROUP,
             subgroup=self.subgroup,
             quantity_kg=1000,
             criado_por=self.coordenador,
         )
-        coordenador_regional = User.objects.create_user(
-            username="coord_regional", password="x", hierarchy_node=self.regional
-        )
+        gerente_user = User.objects.create_user(username="gerente", password="x", hierarchy_node=self.gerente)
 
         created = DistributeGoalService.distribute(
-            regional_allocation,
+            gerente_allocation,
             [
                 ChildAllocationSpec(
                     owner_node_id=local_b.id,
@@ -194,7 +189,7 @@ class SelfVendedorAutoDistributionTests(TestCase):
                     subgroup_id=self.subgroup.id,
                 )
             ],
-            coordenador_regional,
+            gerente_user,
         )
 
         self.assertFalse(created[0].distributed)

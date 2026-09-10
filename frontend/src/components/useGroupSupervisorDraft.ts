@@ -138,7 +138,7 @@ export function useGroupSupervisorDraft(groupId: number | null, supervisors: Hie
   }
 
   // Regra já estipulada (mesma exigida em `useDistributionRows`/`DistributionForm`, usada em
-  // Gerente→Regional e Regional→Local): só é permitido salvar quando TODOS os alvos têm um valor
+  // Gerente→Local): só é permitido salvar quando TODOS os alvos têm um valor
   // preenchido (nenhum "" — um alvo sem decisão não pode virar 0 kg por omissão) e a soma fecha
   // exatamente com a meta do subgrupo, nem mais nem menos.
   function isRowReadyToSave(allocation: GoalAllocation): boolean {

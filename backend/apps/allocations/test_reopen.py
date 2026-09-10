@@ -125,12 +125,17 @@ class ReopenAllocationServiceTests(TestCase):
 
     def test_reopen_cascades_delete_and_resets_distributed_flag(self):
         local_alloc_a, _local_alloc_b = self._distribute_gerente_to_both_locais()
-        supervisor_alloc, vendedor_alloc = self._distribute_branch_down(
+        (supervisor_alloc,) = DistributeGoalService.distribute(
             local_alloc_a,
-            self.supervisor_a,
-            self.vendedor_a,
-            [self.local_a_user, self.supervisor_a_user],
-            qty=600,
+            [
+                ChildAllocationSpec(
+                    owner_node_id=self.supervisor_a.id,
+                    quantity_kg=600,
+                    granularity=GoalAllocation.Granularity.SUBGROUP,
+                    subgroup_id=self.subgroup.id,
+                )
+            ],
+            criado_por=self.local_a_user,
         )
 
         ReopenAllocationService.reopen(local_alloc_a, criado_por=self.local_a_user)
@@ -138,7 +143,6 @@ class ReopenAllocationServiceTests(TestCase):
         local_alloc_a.refresh_from_db()
         self.assertFalse(local_alloc_a.distributed)
         self.assertFalse(GoalAllocation.objects.filter(id=supervisor_alloc.id).exists())
-        self.assertFalse(GoalAllocation.objects.filter(id=vendedor_alloc.id).exists())
 
     def test_reopen_for_hierarchy_change_cascades_delete_regardless_of_depth(self):
         # Caminho automático da O4 (mudança de hierarquia) não tem a trava de "filho já avançou" —
@@ -165,12 +169,17 @@ class ReopenAllocationServiceTests(TestCase):
 
     def test_reopen_creates_audit_log_entry(self):
         local_alloc_a, _local_alloc_b = self._distribute_gerente_to_both_locais()
-        supervisor_alloc, vendedor_alloc = self._distribute_branch_down(
+        (supervisor_alloc,) = DistributeGoalService.distribute(
             local_alloc_a,
-            self.supervisor_a,
-            self.vendedor_a,
-            [self.local_a_user, self.supervisor_a_user],
-            qty=600,
+            [
+                ChildAllocationSpec(
+                    owner_node_id=self.supervisor_a.id,
+                    quantity_kg=600,
+                    granularity=GoalAllocation.Granularity.SUBGROUP,
+                    subgroup_id=self.subgroup.id,
+                )
+            ],
+            criado_por=self.local_a_user,
         )
 
         ReopenAllocationService.reopen(local_alloc_a, criado_por=self.local_a_user)
@@ -179,11 +188,11 @@ class ReopenAllocationServiceTests(TestCase):
         self.assertEqual(entry.action, AuditLogEntry.Action.REABERTURA)
         self.assertEqual(entry.changed_by, self.local_a_user)
         invalidated_ids = {item["id"] for item in entry.changes["filhas_invalidadas"]}
-        self.assertEqual(invalidated_ids, {supervisor_alloc.id, vendedor_alloc.id})
+        self.assertEqual(invalidated_ids, {supervisor_alloc.id})
 
     def test_reopen_is_scoped_to_the_branch_only(self):
         local_alloc_a, local_alloc_b = self._distribute_gerente_to_both_locais()
-        self._distribute_branch_down(
+        supervisor_alloc_a, _vendedor_alloc_a = self._distribute_branch_down(
             local_alloc_a,
             self.supervisor_a,
             self.vendedor_a,
@@ -198,6 +207,9 @@ class ReopenAllocationServiceTests(TestCase):
             qty=400,
         )
 
+        # Supervisor A já repassou pro Vendedor A (trabalho real) — reopen() em Local A sozinho
+        # seria bloqueado (trava 2026-08-04); reseta de baixo pra cima primeiro.
+        ReopenAllocationService.reopen(supervisor_alloc_a, criado_por=self.supervisor_a_user)
         ReopenAllocationService.reopen(local_alloc_a, criado_por=self.local_a_user)
 
         # O ramo B, irmão não tocado, permanece intacto.
@@ -337,7 +349,7 @@ class ReopenAllocationServiceTests(TestCase):
 
     def test_reopen_makes_cycle_incomplete_again_and_redistribute_closes_it_back(self):
         local_alloc_a, local_alloc_b = self._distribute_gerente_to_both_locais()
-        self._distribute_branch_down(
+        supervisor_alloc_a, _vendedor_alloc_a = self._distribute_branch_down(
             local_alloc_a,
             self.supervisor_a,
             self.vendedor_a,
@@ -353,6 +365,8 @@ class ReopenAllocationServiceTests(TestCase):
         )
         self.assertTrue(CycleCompletenessChecker.is_complete(self.cycle))
 
+        # Supervisor A já repassou pro Vendedor A — reset de baixo pra cima (trava 2026-08-04).
+        ReopenAllocationService.reopen(supervisor_alloc_a, criado_por=self.supervisor_a_user)
         ReopenAllocationService.reopen(local_alloc_a, criado_por=self.local_a_user)
         self.assertFalse(CycleCompletenessChecker.is_complete(self.cycle))
 

@@ -144,7 +144,7 @@ class VendorSubgroupExportViewTests(APITestCase):
         lines = content.strip().splitlines()
         self.assertEqual(
             lines[0],
-            "coordenador_regional,coordenador_local,vendedor,subgrupo,"
+            "coordenador_local,vendedor,subgrupo,"
             "soma_3_meses_kg,soma_12_meses_kg,media_3_meses_kg,media_12_meses_kg",
         )
         self.assertIn("Joao", lines[1])
