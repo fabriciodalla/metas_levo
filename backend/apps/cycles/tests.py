@@ -8,9 +8,30 @@ from apps.catalog.models import ProductGroup, ProductSubgroup
 from apps.hierarchy.models import HierarchyNode
 
 from .models import Cycle
-from .services import CloseCycleService, CycleNotCompleteError
+from .services import CloseCycleService, CycleAlreadyExistsError, CycleNotCompleteError, OpenCycleService
 
 User = get_user_model()
+
+
+class OpenCycleServiceTests(TestCase):
+    def test_open_creates_cycle_in_aberto_status(self):
+        cycle = OpenCycleService.open(2026, 9)
+
+        self.assertEqual(cycle.ano, 2026)
+        self.assertEqual(cycle.mes, 9)
+        self.assertEqual(cycle.status, Cycle.Status.ABERTO)
+
+    def test_open_rejects_month_that_already_has_a_cycle(self):
+        Cycle.objects.create(ano=2026, mes=7)
+
+        with self.assertRaises(CycleAlreadyExistsError):
+            OpenCycleService.open(2026, 7)
+
+    def test_open_rejects_duplicate_even_when_existing_cycle_is_closed(self):
+        existing = Cycle.objects.create(ano=2026, mes=7, status=Cycle.Status.FECHADO)
+
+        with self.assertRaises(CycleAlreadyExistsError):
+            OpenCycleService.open(existing.ano, existing.mes)
 
 
 class CloseCycleServiceTests(TestCase):
@@ -107,6 +128,20 @@ class CloseCycleServiceTests(TestCase):
 
         with self.assertRaises(CycleNotCompleteError):
             CloseCycleService.close(self.cycle)
+
+    def test_close_force_succeeds_despite_stuck_allocation(self):
+        CloseCycleService.close(self.cycle, force=True)
+
+        self.cycle.refresh_from_db()
+        self.assertEqual(self.cycle.status, Cycle.Status.FECHADO)
+        self.assertIsNotNone(self.cycle.closed_at)
+
+    def test_close_force_still_rejects_when_already_closed(self):
+        self._distribute_full_chain()
+        CloseCycleService.close(self.cycle)
+
+        with self.assertRaises(CycleNotCompleteError):
+            CloseCycleService.close(self.cycle, force=True)
 
 
 class EndToEndVendedorClosureTests(TestCase):

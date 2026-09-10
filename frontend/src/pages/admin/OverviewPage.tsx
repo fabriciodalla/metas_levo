@@ -26,6 +26,28 @@ function formatKg(value: number): string {
   return `${value.toLocaleString("pt-BR", { maximumFractionDigits: 0 })} kg`;
 }
 
+interface AllocationGroupBucket {
+  key: string;
+  groupNome: string | null;
+  rows: AllocationOverview[];
+}
+
+// Um Coordenador Local que já quebrou uma meta de grupo em subgrupos
+// (SplitGroupIntoSubgroupsService) acumula, sob o mesmo nó, a alocação de grupo original (já
+// superada) mais uma por subgrupo — todas resolvendo pro mesmo nome de grupo. Sem agrupar aqui, o
+// nome do grupo aparece repetido uma vez por subgrupo na lista.
+function groupAllocationsByGroup(allocations: AllocationOverview[]): AllocationGroupBucket[] {
+  const buckets = new Map<string, AllocationGroupBucket>();
+  for (const a of allocations) {
+    const key = a.group_nome ?? `sem-grupo-${a.id}`;
+    if (!buckets.has(key)) {
+      buckets.set(key, { key, groupNome: a.group_nome, rows: [] });
+    }
+    buckets.get(key)!.rows.push(a);
+  }
+  return [...buckets.values()];
+}
+
 function AllocationTree({
   node,
   childrenByParent,
@@ -63,14 +85,35 @@ function AllocationTree({
         <span className="tree-node-level">{LEVEL_LABELS[node.level as Level]}</span>
       </div>
       <div className="tree-node-allocations" style={{ paddingLeft: depth * 20 + 40 }}>
-        {node.allocations.map((a) => (
-          <div key={a.id} className="tree-allocation-row">
-            <span>{a.group_nome ?? "—"}</span>
-            <span>{formatKg(a.quantity_kg)} atribuídos</span>
-            <span>{formatKg(a.distributed ? a.quantity_kg : 0)} distribuídos</span>
-            <span>{a.distributed ? `aplicado em ${formatDate(a.updated_at)}` : "—"}</span>
-          </div>
-        ))}
+        {groupAllocationsByGroup(node.allocations).map((bucket) => {
+          // Quando o grupo já foi quebrado em subgrupos (SplitGroupIntoSubgroupsService), a
+          // alocação de grupo original só marca "já quebrado" — o valor real distribuído pra
+          // frente vem de cada subgrupo, que fecha exatamente com ela (ClosureValidator).
+          const groupRow = bucket.rows.find((r) => r.granularity === "GROUP") ?? null;
+          const subgroupRows = bucket.rows.filter((r) => r.granularity !== "GROUP");
+          const atribuido = groupRow
+            ? groupRow.quantity_kg
+            : subgroupRows.reduce((sum, r) => sum + r.quantity_kg, 0);
+          const distribuidas = subgroupRows.filter((r) => r.distributed);
+          const distribuido =
+            subgroupRows.length > 0
+              ? distribuidas.reduce((sum, r) => sum + r.quantity_kg, 0)
+              : groupRow?.distributed
+                ? groupRow.quantity_kg
+                : 0;
+          const lastDistributedAt = (subgroupRows.length > 0 ? distribuidas : groupRow?.distributed ? [groupRow] : [])
+            .map((r) => r.updated_at)
+            .reduce<string | null>((latest, updatedAt) => (!latest || updatedAt > latest ? updatedAt : latest), null);
+
+          return (
+            <div key={bucket.key} className="tree-allocation-row">
+              <span>{bucket.groupNome ?? "—"}</span>
+              <span>{formatKg(atribuido)} atribuídos</span>
+              <span>{formatKg(distribuido)} distribuídos</span>
+              <span>{lastDistributedAt ? `aplicado em ${formatDate(lastDistributedAt)}` : "—"}</span>
+            </div>
+          );
+        })}
       </div>
       {isOpen && hasChildren && (
         <ul className="tree-children">

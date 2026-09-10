@@ -151,8 +151,9 @@ def _seasonal_trend_breakdown(history: list[MonthlyQuantity]) -> SeasonalTrendBr
 
 
 def _seasonal_trend_forecast(history: list[MonthlyQuantity]) -> float:
-    """Só o valor final — mantido para P2-P4 (`SeasonalTrendDistributionStrategy`), que usam a
-    projeção como peso relativo e não precisam do breakdown."""
+    """Só o valor final — usado por `SeasonalTrendDistributionStrategy` (não mais o default de
+    P2-P4, ver Decisão 6 revisão 2026-09-03, mas ainda uma implementação válida de
+    `DistributionStrategy`), que usa a projeção como peso relativo e não precisa do breakdown."""
     return _seasonal_trend_breakdown(history).forecast_kg
 
 
@@ -248,19 +249,30 @@ class LargestRemainderRoundingPolicy(RoundingPolicy):
 
 
 class SeasonalTrendDistributionStrategy(DistributionStrategy):
-    """P2-P4 aprovada (Decisão 6 revisada): reparte total_kg entre os alvos proporcionalmente à
+    """P2-P4, fórmula original (Decisão 6): reparte total_kg entre os alvos proporcionalmente à
     projeção de tendência + sazonalidade do histórico de cada um, fechando em KG inteiro via
     `RoundingPolicy` plugável (P5 continua não-aprovada — o placeholder é só o default, não fica
     hardcoded aqui).
+
+    Substituída por `RecentAverageDistributionStrategy` como default do modo `AUTO` em todos os
+    níveis (Decisão 6, revisão 2026-09-03) — a mesma instabilidade do índice sazonal com 1 única
+    observação por mês do calendário (ver docstring de `_seasonal_trend_breakdown`) podia zerar a
+    sugestão inteira quando o mês-semente da janela tivesse tido uma venda pontualmente fraca/nula,
+    mesmo com tendência forte nos demais meses. Mantida como implementação alternativa (estratégias
+    seguem plugáveis por design, Decisão 5) e coberta por testes, mas não é mais o que
+    `default_distribution_registry` usa.
 
     Consome uma série já resolvida por alvo (`HierarchyNode.id`) — a extração a partir de
     `DistributionBaseline` (que só tem `salesperson_name` em texto) segue bloqueada até O3/O5
     (mapeamento salesperson_name/nk_vendedor -> HierarchyNode) ser resolvida.
 
-    `history_by_target` deve sempre vir filtrado por GRUPO inteiro (nunca por subgrupo), mesmo
-    quando o repasse resultante é decomposto em subgrupo (P3/P4) — ver docs/decisions.md, Decisão
-    6, refinamento 2026-07-21. Quem monta esse dict deve chamar
-    `SalesHistoryProvider.target_history(..., group_id=X, subgroup_id=None)`.
+    `history_by_target` vem filtrado por GRUPO inteiro quando a alocação sendo distribuída
+    também é de granularidade GROUP (Gerente→Regional, Regional→Local — Decisão 6, refinamento
+    2026-07-21), mas pelo SUBGRUPO específico quando a alocação já é SUBGROUP (Meta Supervisor,
+    Meta Vendedor — Decisão 6, revisão 2026-09-02, a pedido do usuário: quem nunca vendeu aquele
+    subgrupo não deve puxar sugestão automática nele). Quem monta esse dict decide o filtro via
+    `SalesHistoryProvider.target_history(..., group_id=X, subgroup_id=Y ou None)` — ver
+    `_build_child_distribution_contexts` em `services.py`.
     """
 
     def __init__(self, history_by_target: dict[int, list[MonthlyQuantity]], rounding_policy: RoundingPolicy):
@@ -274,6 +286,80 @@ class SeasonalTrendDistributionStrategy(DistributionStrategy):
             proportions[target_id] = _seasonal_trend_forecast(history) if history else 0.0
 
         return self._rounding_policy.round_to_close(total_kg, proportions)
+
+
+class RecentAverageDistributionStrategy(DistributionStrategy):
+    """Default do modo `AUTO` em todos os níveis (Decisão 6, revisão 2026-09-03, a pedido
+    explícito do usuário) — reparte `total_kg` proporcionalmente à média dos ÚLTIMOS 3 MESES de
+    histórico de cada alvo, em vez da projeção de tendência+sazonalidade de
+    `SeasonalTrendDistributionStrategy`.
+
+    Motivo original (quebra Grupo→Subgrupo, tela "Distribuir Produtos"): a extrapolação de
+    tendência+sazonalidade amplificava demais variações do histórico, produzindo sugestões que
+    divergiam bastante da média real vendida (ex.: um subgrupo com média de 425 kg/mês saindo
+    sugerido em 82 kg, outro com média de 31.427 kg/mês saindo sugerido em 47.667 kg) — proporção
+    pela média recente é mais estável e corresponde ao que o usuário já vê como "Média 3 meses" no
+    restante da UI.
+
+    Estendida no mesmo dia (2026-09-03) para os demais níveis (P2 Regional→Local, a segunda metade
+    de P3 — quebra Subgrupo→Supervisor — e P4 Supervisor→Vendedor, via
+    `default_distribution_registry`): mesmo sintoma, achado ao investigar itens de Revenda sem
+    nenhuma sugestão pré-preenchida para nenhum Supervisor mesmo com histórico forte — o índice
+    sazonal do mês-semente da janela (calculado a partir de uma única observação, ver
+    `_seasonal_trend_breakdown`) tinha vindo de um mês pontualmente sem venda registrada, zerando a
+    projeção inteira em vez de só distorcê-la. Continua só a sugestão pré-preenchida (editável).
+
+    `min_share_pct` (confirmado com o usuário: 0.5): quem fica abaixo desse percentual do total
+    de participação (soma das médias de todos os alvos) é zerado — não recebe sugestão nenhuma —
+    e o kg que sobraria pra ele é redistribuído proporcionalmente só entre quem passou do piso
+    (nunca em partes iguais). Evita sugerir frações residuais insignificantes (ex.: 82 kg de 93
+    mil) pra itens de cauda longa, concentrando a sugestão em quem realmente vende o produto.
+
+    Garantia (confirmada com o usuário, 2026-09-03): `distribute()` **nunca** deixa de propor uma
+    divisão quando há pelo menos um alvo — mesmo sem NENHUM histórico de venda (média 3 meses zero
+    para todos), reparte `total_kg` em partes iguais entre os alvos em vez de levantar erro e
+    degradar pra "sem sugestão nenhuma". É só o ponto de partida (editável antes de confirmar), mas
+    sempre existe algo pré-preenchido pra quem está distribuindo.
+    """
+
+    def __init__(
+        self,
+        history_by_target: dict[int, list[MonthlyQuantity]],
+        rounding_policy: RoundingPolicy,
+        min_share_pct: float = 0.5,
+    ):
+        self._history_by_target = history_by_target
+        self._rounding_policy = rounding_policy
+        self._min_share_pct = min_share_pct
+
+    def _recent_average(self, target_id: int) -> float:
+        history = self._history_by_target.get(target_id, [])
+        last_3 = history[-3:] if len(history) >= 3 else history
+        return sum(point.quantity_kg for point in last_3) / len(last_3) if last_3 else 0.0
+
+    def distribute(self, total_kg: int, target_ids: list[int], context: dict | None = None) -> dict[int, int]:
+        averages = {target_id: self._recent_average(target_id) for target_id in target_ids}
+        total_average = sum(averages.values())
+        if total_average <= 0:
+            # Ninguém tem histórico de venda pra basear a sugestão — divide em partes iguais em
+            # vez de degradar pra "sem sugestão nenhuma" (garantia confirmada com o usuário,
+            # 2026-09-03: sempre existe uma sugestão pré-preenchida, mesmo sem dado nenhum).
+            return self._rounding_policy.round_to_close(
+                total_kg, {target_id: 1.0 for target_id in target_ids}
+            )
+
+        significant = {
+            target_id: avg
+            for target_id, avg in averages.items()
+            if avg / total_average * 100 >= self._min_share_pct
+        }
+        # Grupo fragmentado demais (todo mundo abaixo do piso) — usa todo mundo mesmo assim, em
+        # vez de degradar pra "sem sugestão nenhuma" só por causa do piso de cauda longa.
+        if not significant:
+            significant = averages
+
+        rounded = self._rounding_policy.round_to_close(total_kg, significant)
+        return {target_id: rounded.get(target_id, 0) for target_id in target_ids}
 
 
 @dataclass(frozen=True)
@@ -315,13 +401,17 @@ def _build_default_registry() -> DistributionStrategyRegistry:
             lambda quantities_by_target: ManualDistributionStrategy(quantities_by_target),
         )
     # AUTO cobre P2 (Gerente->Local), P3 (quebra Local->Supervisor) e P4 (Supervisor->Vendedor) —
-    # mesma fórmula (tendência+sazonalidade) nos três níveis, ver docs/decisions.md, Decisão 6 e
-    # Decisão 14 (remoção do nível Regional; P2 antes era Regional->Local).
+    # ver docs/decisions.md, Decisão 6 e Decisão 14 (remoção do nível Regional; P2 antes era
+    # Regional->Local). Usa `RecentAverageDistributionStrategy` (média dos últimos 3 meses) desde
+    # 2026-09-03 — mesma fórmula já usada na quebra Grupo->Subgrupo, estendida pra cá a pedido
+    # explícito do usuário depois de achar itens sem nenhuma sugestão pré-preenchida por causa da
+    # fragilidade do índice sazonal de `SeasonalTrendDistributionStrategy` (ver docstring das duas
+    # classes acima).
     for level in ("GERENTE", "LOCAL", "SUPERVISOR"):
         registry.register(
             level,
             "AUTO",
-            lambda history_by_target, rounding_policy=None: SeasonalTrendDistributionStrategy(
+            lambda history_by_target, rounding_policy=None: RecentAverageDistributionStrategy(
                 history_by_target, rounding_policy or LargestRemainderRoundingPolicy()
             ),
         )

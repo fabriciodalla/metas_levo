@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Count, Prefetch, Q
 
 from apps.audit.models import AuditLogEntry
 from apps.catalog.models import ProductGroup, ProductSubgroup
@@ -15,7 +16,7 @@ from .strategies import (
     GroupSuggestion,
     LargestRemainderRoundingPolicy,
     MonthlyQuantity,
-    SeasonalTrendDistributionStrategy,
+    RecentAverageDistributionStrategy,
     SeasonalTrendSuggestionStrategy,
     StrategyNotConfiguredError,
     default_distribution_registry,
@@ -70,11 +71,30 @@ class DistributeGoalService:
     def distribute(
         parent: GoalAllocation, children: list[ChildAllocationSpec], criado_por
     ) -> list[GoalAllocation]:
-        if parent.distributed:
-            raise AllocationClosureError("Esta alocação já foi distribuída.")
-
         if not criado_por.hierarchy_nodes.filter(id=parent.owner_node_id).exists():
             raise AllocationScopeError("Você só pode distribuir uma alocação que possui.")
+
+        created = DistributeGoalService._distribute_unchecked(parent, children, criado_por)
+
+        # Autogestão (pedido do usuário, 2026-08-07): se algum filho recém-criado é dono de um
+        # Supervisor cujo único Vendedor ativo é ele mesmo (mesmo nome), não existe decisão real
+        # de repasse — fecha sozinho, sem passar pela tela "Meta Vendedor".
+        for allocation in created:
+            SelfVendedorAutoDistributionService.cascade_if_eligible(allocation, criado_por)
+
+        return created
+
+    @staticmethod
+    def _distribute_unchecked(
+        parent: GoalAllocation, children: list[ChildAllocationSpec], criado_por
+    ) -> list[GoalAllocation]:
+        """Núcleo do repasse, sem a checagem de posse — usada tanto por `distribute()` (repasse
+        manual, a checagem já rodou antes de chamar) quanto por
+        `SelfVendedorAutoDistributionService` (repasse automático Supervisor->Vendedor, disparado
+        por quem distribuiu pro Supervisor e não ocupa o nó dele). Sempre chamada de dentro de uma
+        transação já aberta por quem invoca — não tem `@transaction.atomic` próprio."""
+        if parent.distributed:
+            raise AllocationClosureError("Esta alocação já foi distribuída.")
 
         parent_id_by_node_id = dict(
             HierarchyNode.objects.filter(id__in=[child.owner_node_id for child in children]).values_list(
@@ -113,6 +133,82 @@ class DistributeGoalService:
         return created
 
 
+class SelfVendedorAutoDistributionService:
+    """Quando um Supervisor tem exatamente um Vendedor ativo sob ele, com o mesmo nome (o padrão
+    de autogestão já visto no sistema — a mesma pessoa ocupa as duas posições, ex.: Fabiano/
+    Rafael, que além de coordenar/supervisionar também têm carteira própria), repassar pra ele
+    nunca é uma decisão real: só existe um alvo possível, e a quantidade é sempre 100% do que o
+    Supervisor recebeu. Pedido explícito do usuário (2026-08-07): a alocação do Vendedor é criada
+    e fechada automaticamente no mesmo instante em que o Coordenador distribui pro Supervisor —
+    sem passar pela tela "Meta Vendedor" pra esse caso específico (diferente de P1-P4, que só
+    pré-preenchem e sempre exigem confirmação humana — aqui não existe escolha a confirmar).
+
+    Só entra em cena logo depois de `DistributeGoalService` criar uma alocação cujo dono é
+    SUPERVISOR — chamada de dentro da mesma transação de `distribute()`, por isso usa
+    `_distribute_unchecked` (quem disparou o repasse pro Supervisor é o Coordenador, que não
+    ocupa o nó do Supervisor — a checagem de posse normal sempre rejeitaria).
+    """
+
+    @staticmethod
+    def is_self_managed_supervisor(node: HierarchyNode) -> bool:
+        """Regra de elegibilidade única (usada aqui e por `GoalAllocationViewSet.get_queryset` pra
+        excluir esses repasses de `has_further_distribution`, ver revisão 2026-09-03 abaixo): nó
+        SUPERVISOR com exatamente 1 Vendedor ativo sob ele, mesmo nome."""
+        if node.level != HierarchyNode.Level.SUPERVISOR:
+            return False
+        vendedores = list(node.children.filter(level=HierarchyNode.Level.VENDEDOR, ativo=True))
+        if len(vendedores) != 1:
+            return False
+        return vendedores[0].nome.strip().lower() == node.nome.strip().lower()
+
+    @staticmethod
+    def self_managed_supervisor_ids() -> set[int]:
+        """Mesma regra de `is_self_managed_supervisor`, em lote — usada por
+        `GoalAllocationViewSet.get_queryset` pra excluir repasses de autogestão de
+        `has_further_distribution` (revisão 2026-09-03): não é decisão real de ninguém — só existe
+        1 alvo possível —, então resetar e redistribuir de novo não perde trabalho nenhum, seja
+        qual for a quantidade. 2 queries (candidatos + prefetch dos vendedores), não N+1."""
+        candidates = (
+            HierarchyNode.objects.filter(level=HierarchyNode.Level.SUPERVISOR, ativo=True)
+            .annotate(
+                active_vendedor_count=Count(
+                    "children",
+                    filter=Q(children__level=HierarchyNode.Level.VENDEDOR, children__ativo=True),
+                )
+            )
+            .filter(active_vendedor_count=1)
+            .prefetch_related(
+                Prefetch(
+                    "children",
+                    queryset=HierarchyNode.objects.filter(level=HierarchyNode.Level.VENDEDOR, ativo=True),
+                    to_attr="active_vendedores",
+                )
+            )
+        )
+        return {
+            node.id
+            for node in candidates
+            if node.active_vendedores[0].nome.strip().lower() == node.nome.strip().lower()
+        }
+
+    @staticmethod
+    def cascade_if_eligible(allocation: GoalAllocation, criado_por) -> GoalAllocation | None:
+        owner_node = allocation.owner_node
+        if not SelfVendedorAutoDistributionService.is_self_managed_supervisor(owner_node):
+            return None
+
+        vendedor = owner_node.children.get(level=HierarchyNode.Level.VENDEDOR, ativo=True)
+        child = ChildAllocationSpec(
+            owner_node_id=vendedor.id,
+            quantity_kg=allocation.quantity_kg,
+            granularity=allocation.granularity,
+            group_id=allocation.group_id,
+            subgroup_id=allocation.subgroup_id,
+            product_id=allocation.product_id,
+        )
+        return DistributeGoalService._distribute_unchecked(allocation, [child], criado_por)[0]
+
+
 def _collect_descendants(allocation: GoalAllocation) -> list[GoalAllocation]:
     """Sub-árvore inteira de GoalAllocation abaixo de `allocation` (não inclui ela mesma), em
     ordem de nível (a última posição da lista contém as folhas mais profundas)."""
@@ -138,11 +234,107 @@ class ReopenAllocationService:
     @staticmethod
     @transaction.atomic
     def reopen(allocation: GoalAllocation, criado_por) -> GoalAllocation:
-        """Reabertura voluntária: só quem possui a alocação pode reabri-la (H4)."""
+        """Reabertura voluntária: só quem possui a alocação pode reabri-la (H4).
+
+        Trava adicional (pedido do usuário, 2026-08-04) que `reopen_for_hierarchy_change` (O4)
+        não tem: se algum filho direto já repassou adiante o que recebeu, com trabalho real por
+        trás, bloqueia — reabrir aqui apagaria em cascata um trabalho que já avançou pra baixo,
+        sem quem fez esse trabalho saber. Uma alocação com `distributed=False` nunca tem filhas
+        (só `DistributeGoalService.distribute()` cria filhas, e ele sempre marca `distributed=
+        True` no pai na mesma transação) — checar só os filhos diretos já garante que não existe
+        nada mais fundo pendente de aviso. Destrava de baixo pra cima: cada filho bloqueado
+        precisa resetar a distribuição dele primeiro (mesma regra, aplicada no nível dele) — só
+        depois que nenhum filho direto estiver mais `distributed=True` este reset libera.
+
+        "Trabalho real por trás" usa exatamente a mesma regra de `has_further_distribution`
+        (`GoalAllocationViewSet`/`GoalAllocationSerializer`, revisão 2026-09-03) — um filho com
+        0 kg, ou um repasse automático de autogestão (`SelfVendedorAutoDistributionService`, único
+        alvo possível, mesmo com quantidade > 0) não bloqueiam. As duas checagens precisam ficar em
+        sincronia: se o frontend mostra o botão (porque `has_further_distribution` deu `false`),
+        este método tem que aceitar o reset — senão o botão aparece e a ação falha.
+        """
         if not criado_por.hierarchy_nodes.filter(id=allocation.owner_node_id).exists():
             raise AllocationScopeError("Você só pode reabrir uma alocação que possui.")
 
+        # As duas checagens básicas (já distribuída, ciclo aberto) também vivem em
+        # `_reopen_unchecked` — repetidas aqui só pra ter precedência sobre a trava de filhos
+        # abaixo (senão "ciclo já fechado" apareceria mascarado como "tem filho bloqueando").
+        ReopenAllocationService._ensure_reopenable(allocation)
+
+        blocking_names = ReopenAllocationService._blocking_children_names(allocation)
+        if blocking_names:
+            raise AllocationReopenError(
+                f"Não é possível resetar: {', '.join(blocking_names)} já distribuiu a parte "
+                "recebida adiante. Peça para essa pessoa resetar a distribuição dela primeiro — "
+                "depois disso este reset libera."
+            )
+
         return ReopenAllocationService._reopen_unchecked(allocation, changed_by=criado_por, motivo=None)
+
+    @staticmethod
+    def _blocking_children_names(allocation: GoalAllocation) -> list[str]:
+        """Nomes dos filhos diretos que travam o reset de `allocation` — mesma regra de
+        `has_further_distribution` (revisão 2026-09-03): um filho com 0 kg, ou um repasse
+        automático de autogestão (`SelfVendedorAutoDistributionService`, único alvo possível,
+        mesmo com quantidade > 0), não bloqueia. Compartilhado por `reopen()` e `reopen_group()` —
+        as duas precisam ficar em sincronia com `has_further_distribution`
+        (`GoalAllocationViewSet`/`GoalAllocationSerializer`): se o frontend mostra o botão, o
+        backend tem que aceitar o reset."""
+        self_managed_ids = SelfVendedorAutoDistributionService.self_managed_supervisor_ids()
+        blocking = (
+            allocation.children.filter(distributed=True, quantity_kg__gt=0)
+            .exclude(owner_node_id__in=self_managed_ids)
+            .select_related("owner_node")
+        )
+        return [child.owner_node.nome for child in blocking]
+
+    @staticmethod
+    @transaction.atomic
+    def reopen_group(
+        *, owner_node: HierarchyNode, cycle: Cycle, group_id: int, criado_por
+    ) -> list[GoalAllocation]:
+        """Reseta de uma vez só TODAS as alocações SUBGROUP já distribuídas de um grupo, que
+        `owner_node` possui neste ciclo — pedido explícito do usuário (2026-09-03): as telas "Meta
+        Supervisor"/"Meta Vendedor" (`SubgroupCascadeWorkspace`, frontend) resetam subgrupo por
+        subgrupo via `reopen()`, o que é tedioso quando o nível errou a distribuição do grupo
+        inteiro (um grupo pode ter dezenas de subgrupos). Tudo-ou-nada (confirmado com o usuário):
+        se qualquer subgrupo tiver um filho bloqueando (mesma regra de `reopen()` — trabalho real,
+        não autogestão nem 0 kg), a operação inteira falha listando todos os bloqueios de uma vez,
+        sem resetar nada — evita um grupo pela metade resetado, difícil de auditar.
+
+        Depois de resetado, cada subgrupo volta a `distributed=False`, pronto pra uma nova
+        sugestão automática pré-preencher os campos no frontend — a persistência de fato continua
+        exigindo o mesmo `distribute()`/"Salvar distribuição" de sempre (sugestão nunca se
+        auto-aplica, ver [[project_goal-suggestion-workflow]])."""
+        if not criado_por.hierarchy_nodes.filter(id=owner_node.id).exists():
+            raise AllocationScopeError("Você só pode resetar alocações que possui.")
+
+        allocations = list(
+            GoalAllocation.objects.filter(
+                owner_node=owner_node, cycle=cycle, subgroup__group_id=group_id, distributed=True
+            )
+        )
+        if not allocations:
+            raise AllocationReopenError("Nenhuma distribuição para resetar nesse grupo.")
+
+        for allocation in allocations:
+            ReopenAllocationService._ensure_reopenable(allocation)
+
+        blocking_names: set[str] = set()
+        for allocation in allocations:
+            blocking_names.update(ReopenAllocationService._blocking_children_names(allocation))
+
+        if blocking_names:
+            raise AllocationReopenError(
+                f"Não é possível resetar o grupo: {', '.join(sorted(blocking_names))} já "
+                "distribuiu a parte recebida adiante. Peça pra essas pessoas resetarem a "
+                "distribuição delas primeiro — depois disso este reset libera."
+            )
+
+        for allocation in allocations:
+            ReopenAllocationService._reopen_unchecked(allocation, changed_by=criado_por, motivo=None)
+
+        return allocations
 
     @staticmethod
     @transaction.atomic
@@ -161,12 +353,16 @@ class ReopenAllocationService:
         )
 
     @staticmethod
-    def _reopen_unchecked(allocation: GoalAllocation, changed_by, motivo: dict | None) -> GoalAllocation:
+    def _ensure_reopenable(allocation: GoalAllocation) -> None:
         if not allocation.distributed:
             raise AllocationReopenError("Esta alocação ainda não foi distribuída — nada para reabrir.")
 
         if allocation.cycle.status != Cycle.Status.ABERTO:
             raise AllocationReopenError("Só é possível reabrir alocações de um ciclo aberto.")
+
+    @staticmethod
+    def _reopen_unchecked(allocation: GoalAllocation, changed_by, motivo: dict | None) -> GoalAllocation:
+        ReopenAllocationService._ensure_reopenable(allocation)
 
         descendants = _collect_descendants(allocation)
 
@@ -408,7 +604,11 @@ class ChildDistributionContext:
     `suggested_kg` só vem preenchido quando o nível de quem distribui tem fórmula AUTO ligada
     (GERENTE/LOCAL/SUPERVISOR — ver `default_distribution_registry`); sem AUTO ligada
     fica None e a UI não mostra número pré-calculado nenhum, só o histórico/comparativos.
-    """
+
+    Quando a alocação sendo distribuída é de um SUBGRUPO específico, `history` (e tudo que dele
+    deriva — `same_month_last_year_kg`, `last_3_months_avg_kg`, `historical_share_pct`, `has_gap`
+    e o peso usado em `suggested_kg`) é sempre o histórico daquele subgrupo, não do grupo inteiro
+    — ver Decisão 6, revisão 2026-09-02."""
 
     owner_node_id: int
     history: list[MonthlyQuantity]
@@ -423,15 +623,37 @@ PERIOD_MONTHS = 12
 
 
 def _build_child_distribution_contexts(
-    *, owner_node: HierarchyNode, cycle: Cycle, group_id: int | None, total_kg: int
+    *,
+    owner_node: HierarchyNode,
+    cycle: Cycle,
+    group_id: int | None,
+    total_kg: int,
+    subgroup_id: int | None = None,
 ) -> list[ChildDistributionContext]:
     """Núcleo compartilhado entre `DistributionContextService` (Gerente→Local,
     e a distribuição "tudo de uma vez" pro nível LOCAL) e `SupervisorSplitContextService` (Etapa 2
     do wizard de subgrupo do Coordenador Local): pesa os filhos diretos de `owner_node` pelo
-    histórico do GRUPO INTEIRO de cada um (nunca por subgrupo — Decisão 6, refinamento
-    2026-07-21) e reparte `total_kg` entre eles via a `DistributionStrategy` AUTO do nível, se
-    houver. `total_kg` é parametrizado porque a Etapa 2 reparte o valor de um subgrupo específico
-    (ainda não salvo), não a meta inteira do grupo."""
+    histórico de cada um e reparte `total_kg` entre eles via a `DistributionStrategy` AUTO do
+    nível, se houver. `total_kg` é parametrizado porque a Etapa 2 reparte o valor de um subgrupo
+    específico (ainda não salvo), não a meta inteira do grupo.
+
+    `subgroup_id`, quando informado (alocação sendo distribuída é de um subgrupo específico —
+    Meta Supervisor/Meta Vendedor), faz TODO o histórico usado aqui (peso da sugestão automática
+    incluído) ser o do subgrupo, não do grupo inteiro (Decisão 6, revisão 2026-09-02, a pedido
+    explícito do usuário: quem não tem histórico de venda naquele subgrupo específico não deve
+    puxar sugestão automática nele, mesmo tendo histórico forte no grupo como um todo — a edição
+    manual continua livre, isso só afeta o valor pré-preenchido). Sem `subgroup_id` (alocação
+    GROUP — Gerente→Regional, Regional→Local), o histórico continua sendo do grupo inteiro, como
+    sempre foi.
+
+    Quando NINGUÉM tem histórico na base escolhida (soma zero, ex.: `ExternalSalespersonMapping`
+    ainda sem curadoria — O3 em docs/open-questions.md — ou subgrupo novo que ninguém vendeu
+    ainda), `RecentAverageDistributionStrategy` (o `AUTO` default, ver `strategies.py`) não deixa a
+    sugestão vazia: reparte `total_kg` em partes iguais entre os alvos (garantia confirmada com o
+    usuário, 2026-09-03 — sempre existe uma sugestão pré-preenchida, editável, mesmo sem dado
+    nenhum). O `except ValueError` abaixo continua só como rede de segurança pra alguma
+    `DistributionStrategy` alternativa que ainda degrade dessa forma (ex.:
+    `SeasonalTrendDistributionStrategy`, se alguém a registrar de volta)."""
     children_nodes = list(HierarchyNode.objects.filter(parent_id=owner_node.id, ativo=True))
     if not children_nodes or group_id is None:
         return []
@@ -443,6 +665,7 @@ def _build_child_distribution_contexts(
             PERIOD_MONTHS,
             last_month,
             group_id=group_id,
+            subgroup_id=subgroup_id,
         )
         for node in children_nodes
     }
@@ -460,10 +683,11 @@ def _build_child_distribution_contexts(
     except StrategyNotConfiguredError:
         suggested_by_target = {}
     except ValueError:
-        # Nenhum alvo tem histórico (ex.: ExternalSalespersonMapping ainda sem curadoria, ver
-        # O3 em docs/open-questions.md) — a proporção soma zero e a fórmula não tem base pra
-        # sugerir nada. Degrada pra "sem sugestão", igual a nível sem AUTO configurada, em vez
-        # de derrubar o endpoint.
+        # Rede de segurança: o default (`RecentAverageDistributionStrategy`) não levanta mais
+        # ValueError pra "ninguém tem histórico" (reparte em partes iguais, ver docstring acima) —
+        # isso só dispara se alguém registrar uma DistributionStrategy alternativa que ainda
+        # degrade dessa forma. Degrada pra "sem sugestão", igual a nível sem AUTO configurada, em
+        # vez de derrubar o endpoint.
         suggested_by_target = {}
 
     result = []
@@ -497,11 +721,10 @@ class DistributionContextService:
     nova aqui, só orquestra o que já existe em `strategies.py`.
 
     Funciona tanto pra alocação GROUP (Gerente→Local) quanto SUBGROUP — a
-    tela "Meta Supervisor" chama isso numa alocação SUBGROUP já persistida (dona = Coordenador
-    Local, criada por `SplitGroupIntoSubgroupsService`), e o peso continua vindo do histórico do
-    GRUPO inteiro do Supervisor (resolvido via `subgroup.group_id`), nunca do subgrupo específico
-    — mesma regra da Decisão 6, só que a granularidade da alocação-pai agora pode ser mais fina.
-    """
+    tela "Meta Supervisor"/"Meta Vendedor" chama isso numa alocação SUBGROUP já persistida (dona
+    = Coordenador Local ou Supervisor), e desde a Decisão 6 (revisão 2026-09-02) o peso passa a
+    vir do histórico daquele SUBGRUPO específico (resolvido via `allocation.subgroup_id`), não do
+    grupo inteiro — ver `_build_child_distribution_contexts` para o porquê da mudança."""
 
     PERIOD_MONTHS = PERIOD_MONTHS
 
@@ -516,6 +739,7 @@ class DistributionContextService:
             cycle=allocation.cycle,
             group_id=group_id,
             total_kg=allocation.quantity_kg,
+            subgroup_id=allocation.subgroup_id,
         )
 
 
@@ -540,11 +764,19 @@ class SubgroupDistributionContextService:
     """Etapa 1 do wizard de quebra do Coordenador Local: sugere quanto cada SUBGRUPO recebe da
     meta GROUP recebida pelo nó LOCAL, pesando pelo histórico de vendas de cada subgrupo dentro
     do próprio escopo (sub-árvore) daquele nó — análogo a P1 (sugestão por grupo pro Gerente), um
-    nível mais fundo. Fórmula confirmada explicitamente pelo usuário (golden rule do CLAUDE.md):
-    ao contrário do peso entre ALVOS/nós em P2-P4 (que nunca usa histórico de subgrupo, por ser
-    esparso demais por nó), aqui a comparação é entre SUBGRUPOS dentro do mesmo nó, com volume
-    agregado equivalente ao de P1 — não weight entre nós, então a mesma fragilidade não se aplica.
-    """
+    nível mais fundo. Comparação entre SUBGRUPOS dentro do mesmo nó, com volume agregado
+    equivalente ao de P1 (não é peso entre nós/pessoas, então a fragilidade de dado esparso de
+    P2-P4 não se aplica aqui).
+
+    Peso: `RecentAverageDistributionStrategy` (Decisão 6, revisão 2026-09-03, a pedido do
+    usuário) — proporção pela média dos últimos 3 meses de cada subgrupo, com piso de 0,5% de
+    participação (quem fica abaixo é zerado e redistribuído entre os demais). Antes disso era
+    `SeasonalTrendDistributionStrategy` (mesma de P1-P4 na época), trocada porque divergia demais
+    da média real vendida pro caso de comparar produtos dentro de um catálogo — instanciada direto
+    aqui (não via `default_distribution_registry`) porque esta etapa reparte entre SUBGRUPOS do
+    mesmo nó, não entre nós/pessoas de um nível hierárquico. No mesmo dia, a troca foi estendida
+    também ao registry (`default_distribution_registry`, `strategies.py`), então P2-P4 agora usam
+    a mesma fórmula por padrão — ver strategies.py."""
 
     PERIOD_MONTHS = PERIOD_MONTHS
 
@@ -576,7 +808,7 @@ class SubgroupDistributionContextService:
         grand_total = sum(total_12m_by_subgroup.values())
 
         try:
-            strategy = SeasonalTrendDistributionStrategy(
+            strategy = RecentAverageDistributionStrategy(
                 history_by_subgroup, LargestRemainderRoundingPolicy()
             )
             suggested_by_subgroup = strategy.distribute(allocation.quantity_kg, [sg.id for sg in subgroups])

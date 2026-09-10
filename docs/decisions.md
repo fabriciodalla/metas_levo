@@ -96,6 +96,11 @@
 - **Reversibilidade:** fácil, por design.
 
 ## Decisão 6 — Fórmula de cálculo para P1-P4: tendência + sazonalidade sobre 12 meses
+> **Nota (2026-09-03):** esta é a fórmula original das 4 pendências, e continua sendo o que
+> `SeasonalTrendSuggestionStrategy` usa para P1 (valor absoluto sugerido ao Gerente). Para P2-P4
+> (proporção entre alvos), o default do modo `AUTO` passou a ser `RecentAverageDistributionStrategy`
+> (média dos últimos 3 meses) — ver a revisão 2026-09-03 no fim desta seção antes de assumir que
+> P2-P4 ainda usam tendência+sazonalidade por padrão.
 - **Escolha atual:** para as 4 pendências de proporção (P1 sugestão ao Gerente, P2 Gerente→Local,
   P3 quebra Local→Supervisor, P4 Supervisor→Vendedor), a fórmula aprovada é uma **decomposição
   clássica multiplicativa (tendência linear × índice sazonal por mês do calendário)** sobre uma
@@ -161,6 +166,10 @@
     continua sendo uma fórmula própria, ainda sem endpoint `AUTO` ligado, e segue exigindo a mesma
     confirmação explícita do usuário antes de virar requisito definitivo (regra de ouro do
     CLAUDE.md) caso alguém proponha uma.
+  - **Revertido parcialmente pela revisão 2026-09-02 (mais abaixo):** só para quando a própria
+    alocação sendo distribuída já é SUBGROUP (Meta Supervisor/Meta Vendedor) — nesse caso o peso
+    passa a ser do subgrupo específico. Pra alocação GROUP (Gerente→Regional, Regional→Local) a
+    regra deste refinamento (peso sempre do grupo inteiro) continua valendo exatamente como aqui.
 - **Refinamento (2026-07-22) — modo `AUTO` estendido para Gerente→Regional, a pedido explícito do
   usuário:** o repasse Gerente→Regional, até aqui só manual (Decisão original: "Gerente->Regional
   não é uma das pendências nomeadas em open-questions.md"), passa a ter `suggested_kg`
@@ -181,6 +190,104 @@
     Regional→Local). Na prática, as duas etapas descritas nesta revisão e no refinamento de P2-P4
     acima colapsam numa só: Gerente→Local, cobrindo o mesmo território de P2 sem nenhuma fórmula
     nova. Mantido aqui só como registro histórico de quando a extensão do modo `AUTO` foi pedida.
+- **Revisão (2026-09-02) — âncora da janela de sincronização corrigida para "mês atual − 1" (não
+  o próprio mês atual):** a fórmula em si não mudou, mas foi identificado que a janela de
+  sincronização do histórico (`sync_sales_history` CLI e `SyncDataView`) usava como âncora o
+  próprio dia da sincronização (`hoje`), contando "12 meses incluindo o atual" — isso deixa a
+  janela **1 mês curta demais** para o cálculo sazonal de P1, que precisa do mesmo mês do ano
+  anterior relativo ao mês **anterior ao ciclo** (`previous_month(cycle.ano, cycle.mes)`, ver
+  `GoalSuggestionService.suggest_for_cycle`). Sintoma real: ciclo de 09/2026 aberto, mas
+  `GoalSuggestionService` devolvia `seasonal_index=0.0`/`suggested_kg=0` para todos os grupos
+  (`has_gap=True`) porque `DistributionBaseline` não tinha nenhuma linha de 09/2025 — a
+  sincronização (rodada em 09/2026, janela de 12 meses a partir de hoje) só alcançava até
+  10/2025. Corrigido ancorando a janela sempre em "mês atual − 1, e 12 meses completos pra trás
+  daí" — o mês corrente (ainda em andamento) nunca entra na janela — em
+  `backend/apps/sales_history/management/commands/sync_sales_history.py` e
+  `backend/apps/sales_history/views.py` (`SyncDataView`), mantendo os dois pontos de entrada
+  sincronizados no mesmo `months_back`. Sem essa correção, a lacuna se repetiria todo mês (não é
+  um evento isolado de transição): a janela rolante de 12 meses nunca alcança o mesmo mês do ano
+  anterior enquanto ancorada no dia da sincronização.
+- **Revisão (2026-09-02) — peso da sugestão em alocação SUBGROUP passa a ser o histórico do
+  SUBGRUPO específico, revertendo o refinamento 2026-07-21 só para esse caso, a pedido explícito
+  do usuário:** quando a alocação sendo distribuída já é de granularidade SUBGROUP (telas "Meta
+  Supervisor" — Local→Supervisor de um subgrupo — e "Meta Vendedor" — Supervisor→Vendedor de um
+  subgrupo), `_build_child_distribution_contexts` (`backend/apps/allocations/services.py`) agora
+  monta `history_by_target` com `SalesHistoryProvider.target_history(..., group_id=X,
+  subgroup_id=Y)` — o subgrupo da própria alocação — em vez de só `group_id`. Isso afeta `history`,
+  `same_month_last_year_kg`, `last_3_months_avg_kg`, `historical_share_pct`, `has_gap` e o peso por
+  trás de `suggested_kg` igualmente, já que todos derivam do mesmo `history_by_target`.
+  - **Motivo do usuário:** quem nunca vendeu aquele subgrupo específico não deveria puxar sugestão
+    automática de meta nele, mesmo tendo histórico forte no grupo inteiro — a sugestão pré-preenchida
+    existir "porque o grupo vende bem" para um subgrupo que a pessoa nunca tocou distorce a
+    distribuição pra quem realmente atende aquele produto.
+  - **Continua igual pra alocação GROUP** (Gerente→Local, o próprio P2): sem
+    `subgroup_id` na alocação (é `None`), o histórico continua sendo do grupo inteiro — a fragilidade
+    de dado esparso que motivou o refinamento 2026-07-21 (histórico por subgrupo é mais raro que por
+    grupo) segue real e é exatamente o trade-off que o usuário decidiu aceitar aqui, cientemente.
+  - **Sem histórico algum no subgrupo (nem de um alvo, nem de outro):** confirmado com o usuário
+    que o comportamento correto é **não sugerir nada** (soma de peso zero → `ValueError` capturado,
+    mesmo caminho já usado pra "sem `ExternalSalespersonMapping` curada") — **não** cai de volta pro
+    peso do grupo inteiro. 100% manual até existir histórico real no subgrupo.
+  - **Continua só a sugestão pré-preenchida, nunca uma trava:** quem está distribuindo pode digitar
+    manualmente um valor pra alguém com média zero no subgrupo (ex.: lançamento de produto novo pra
+    essa pessoa) — a sugestão automática zerada é só o ponto de partida, não um bloqueio.
+  - Testes: `DistributionContextServiceOnSubgroupTests` em
+    `backend/apps/allocations/test_subgroup_supervisor_context.py`.
+- **Revisão (2026-09-03) — `RecentAverageDistributionStrategy` (média dos últimos 3 meses) vira o
+  default do modo `AUTO` em todos os níveis, substituindo `SeasonalTrendDistributionStrategy`, a
+  pedido explícito do usuário:**
+  - **Primeiro passo (mesmo dia):** a quebra Grupo→Subgrupo (tela "Distribuir Produtos",
+    `SubgroupDistributionContextService`) trocou de tendência+sazonalidade para proporção pela
+    média dos últimos 3 meses de cada subgrupo — a extrapolação de tendência+sazonalidade
+    amplificava demais variações do histórico (ex.: subgrupo com média de 425 kg/mês saindo
+    sugerido em 82 kg). `min_share_pct=0.5`: quem fica abaixo de 0,5% de participação é zerado e
+    redistribuído entre os demais, em vez de sugerir frações residuais insignificantes.
+  - **Extensão (mesmo dia, achado ao investigar Revenda sob o Coordenador Local Fabiano):** vários
+    subgrupos apareciam **sem nenhuma sugestão pré-preenchida para nenhum Supervisor**, mesmo com
+    histórico forte e crescente ao longo do ano — ex. ALMONDEGAS, com um Supervisor vendendo até
+    ~5.000 kg/mês. Causa raiz: o índice sazonal do mês-semente da janela (setembro/2025, primeiro
+    mês da janela de 12 meses ao planejar setembro/2026) vem de **uma única observação** por design
+    (limitação já documentada acima) — nesse mês específico, nenhum Supervisor tinha vendido nada
+    daquele subgrupo, então o índice sazonal de setembro ficou em 0 e zerou a projeção inteira de
+    todo mundo (`tendência × 0 = 0`), mesmo com tendência positiva forte nos outros 11 meses. Com
+    todas as propostas em zero, a soma dava zero e `LargestRemainderRoundingPolicy` levantava
+    `ValueError` — capturado e degradado para "sem sugestão nenhuma" (mesmo caminho de "ninguém tem
+    histórico"), só que aqui havia histórico real, só não naquele mês específico.
+  - **Decisão do usuário:** em vez de tratar isso como um caso especial a mais, usar a mesma
+    fórmula já validada para a quebra Grupo→Subgrupo (`RecentAverageDistributionStrategy`) como
+    default para **todos** os níveis do modo `AUTO` no `default_distribution_registry` — P2
+    (Gerente→Local), a segunda metade de P3 (quebra Subgrupo→Supervisor) e P4
+    (Supervisor→Vendedor). `SeasonalTrendDistributionStrategy` continua existindo como implementação alternativa de
+    `DistributionStrategy` (plugável por design, Decisão 5) e segue coberta por testes, mas deixou
+    de ser o que o registry usa.
+  - **Efeito colateral aceito:** como o piso de 0,5% de `RecentAverageDistributionStrategy` some com
+    a fragmentação por tendência/sazonalidade, mais alvos passam a receber uma sugestão numérica (em
+    vez de ficarem sem nada quando a extrapolação zerava por instabilidade) — mais próximo da média
+    real recente do que da tendência extrapolada, o que já era o motivo original da troca em
+    Grupo→Subgrupo.
+  - Implementado só trocando a fábrica registrada em `_build_default_registry`
+    (`backend/apps/allocations/strategies.py`) — nenhuma mudança em `services.py`,
+    `SalesHistoryProvider` ou nos serializers/endpoints que consomem `suggested_kg`.
+- **Revisão (2026-09-03, mesmo dia) — garantia de que a sugestão automática NUNCA fica vazia,
+  mesmo sem histórico algum:** a pedido explícito do usuário ("tenha certeza que sempre vai ter a
+  distribuição"), `RecentAverageDistributionStrategy.distribute()` deixou de levantar `ValueError`
+  quando a soma das médias de todos os alvos é zero (ninguém vendeu nada naquele
+  grupo/subgrupo/janela). Em vez de degradar para "sem sugestão nenhuma" (100% manual), reparte
+  `total_kg` **em partes iguais** entre os alvos — mesmo padrão que já existia para "todo mundo
+  abaixo do piso de 0,5%" (linha "não cai pra partes iguais... exceto quando *todo mundo* fica de
+  fora", ver docstring da classe), agora estendido para "ninguém tem histórico nenhum".
+  - **Ainda é só o ponto de partida:** a sugestão pré-preenchida por partes iguais continua
+    100% editável antes de confirmar — não é uma trava, só garante que sempre existe algo digitado
+    de largada, mesmo pra grupo/subgrupo novo sem venda registrada.
+  - **Efeito em cascata:** como isso é o único ponto de origem de todas as sugestões `AUTO` (P1
+    fica de fora — segue tendência+sazonalidade, sempre pôde levantar `ValueError` genuinamente
+    quando o grupo inteiro nunca vendeu nada, caso mais raro), a garantia vale automaticamente para
+    P2 (Gerente→Local), P3 completo (Grupo→Subgrupo e Subgrupo→Supervisor) e P4
+    (Supervisor→Vendedor) — não foi necessário mexer em `services.py` de novo.
+  - Testes atualizados: os que antes esperavam `suggested_kg is None` para "sem histórico nenhum"
+    agora esperam o split igualitário (`test_distribution_context.py`,
+    `test_subgroup_supervisor_context.py`); teste unitário novo em
+    `RecentAverageDistributionStrategyTests` (`test_strategies.py`).
 - **Reversibilidade:** fácil — troca de `RoundingPolicy`/`DistributionStrategy` por design (Decisão 5).
 
 ## Decisão 7 — Método de arredondamento (P5): maior resto / Hamilton
@@ -237,6 +344,88 @@
 - **Reversibilidade:** média — trocar para soft delete depois exigiria migração + atualizar as
   queries citadas acima, mas o contrato público (`ReopenAllocationService.reopen()`,
   `POST /reopen/`) não mudaria.
+- **Revisão (2026-09-03) — a trava do botão "Resetar distribuição" (`has_further_distribution`,
+  2026-08-04) ignora repasses automáticos de autogestão, com ou sem quantidade:** achado real ao
+  investigar por que o botão de reset sumia numa tela "Distribuição para Supervisores" mesmo com os
+  dois supervisores com quantidade real (Iago, Josiel) sem terem mexido em nada ainda — o culpado
+  era um terceiro supervisor (Wagner), em autogestão (repasse automático Supervisor→Vendedor,
+  `SelfVendedorAutoDistributionService`), cujo repasse automático roda sempre que ele recebe algo
+  (0 kg num subgrupo, 597 kg noutro) e marca esse filho como `distributed=True` — bastava isso pra
+  travar o reset do pai pra todo mundo, mesmo sem nenhuma decisão real em risco.
+  - **Primeira correção (só 0 kg):** `quantity_kg__gt=0` além de `distributed=True` — cobriu o caso
+    do subgrupo onde o Wagner tinha 0 kg, mas não o caso seguinte, onde ele tinha 597 kg reais.
+  - **Correção completa (mesmo dia, a pedido do usuário):** filho cujo `owner_node` é um Supervisor
+    em autogestão (`SelfVendedorAutoDistributionService.is_self_managed_supervisor` — único
+    Vendedor ativo, mesmo nome) não conta pra `has_further_distribution`, **independente da
+    quantidade**. Motivo: repasse de autogestão nunca é uma decisão — só existe 1 alvo possível —,
+    então resetar o pai e redistribuir de novo com outra quantidade produz o mesmo resultado
+    automaticamente, sem perder nada. `self_managed_supervisor_ids()` (novo método, mesma regra em
+    lote) computa isso 1x por request, não por linha, evitando N+1 na listagem.
+  - **Continua bloqueando de verdade quando há quantidade real de alguém que NÃO está em
+    autogestão:** o cenário original da Decisão (um Supervisor com múltiplos Vendedores já dividiu
+    manualmente entre eles) não muda — só repasses de autogestão (0 kg ou não) deixaram de contar.
+  - **`ReopenAllocationService.reopen()` precisou da mesma correção:** a trava de
+    `blocking_children` (2026-08-04) é uma checagem *separada* de `has_further_distribution` —
+    corrige só uma das duas teria deixado o botão "Resetar distribuição" aparecer na tela (porque
+    `has_further_distribution` já dava `false`) mas a ação de fato falhar ao clicar (porque
+    `reopen()` ainda usava a regra antiga, sem a exceção de autogestão). As duas agora aplicam
+    exatamente o mesmo filtro (`quantity_kg__gt=0` + exclusão de `self_managed_supervisor_ids()`).
+  - **Escopo do reset continua o mesmo de sempre (H4), não muda com esta revisão:** resetar uma
+    alocação apaga em cascata SÓ a sub-árvore dela pra baixo (`_collect_descendants`) — resetar o
+    repasse de um SUBGRUPO específico pra Supervisores não toca nos outros subgrupos do mesmo
+    grupo (são `GoalAllocation` irmãs, independentes); resetar a alocação de GRUPO inteira (antes
+    de quebrar em subgrupos) é que apaga tudo que foi feito a partir dela — subgrupos, Supervisores
+    e Vendedores já cascateados — porque tudo isso é descendente dela. O botão de cada tela liga a
+    um `allocation` específico (o subgrupo selecionado, ou o grupo inteiro, dependendo da tela) —
+    o alcance do reset é sempre a partir *desse* nó pra baixo, nunca mais amplo que isso.
+  - Testes: `test_has_further_distribution_ignores_a_zero_kg_distributed_child`,
+    `test_has_further_distribution_still_blocks_on_a_real_distributed_child` e
+    `test_has_further_distribution_ignores_a_self_managed_cascade_with_real_quantity` em
+    `backend/apps/allocations/test_api.py`; `test_reopen_not_blocked_by_a_self_managed_cascade_even_with_real_quantity`
+    em `backend/apps/allocations/test_reopen.py`.
+- **Extensão (2026-09-03) — reset em lote de um grupo inteiro (`reopen_group`), pedido explícito do
+  usuário:** as telas "Meta Supervisor"/"Meta Vendedor" (`SubgroupCascadeWorkspace`) só tinham o
+  reset por subgrupo (`ResetDistributionButton`, ligado à alocação SUBGROUP selecionada) — tedioso
+  quando quem distribui erra a distribuição do grupo inteiro pro nível de baixo (um grupo pode ter
+  dezenas de subgrupos, cada um exigindo um reset separado). Ao contrário do reset do "Distribuir
+  Produtos" (Grupo→Subgrupo, já existia e continua igual — reseta a alocação GROUP inteira de uma
+  vez, porque ali é literalmente UMA alocação), aqui o problema era ter várias alocações SUBGROUP
+  independentes, cada uma com seu próprio `distributed`.
+  - **Escolha:** `ReopenAllocationService.reopen_group(*, owner_node, cycle, group_id, criado_por)`
+    — encontra todas as alocações SUBGROUP daquele grupo, já distribuídas, que `owner_node` possui
+    no ciclo, e reseta todas de uma vez (mesmo `_reopen_unchecked` reaproveitado por alocação).
+    Exposto via `POST /api/allocations/reset-group/` (`{cycle_id, owner_node_id, group_id}`) e o
+    componente `ResetGroupDistributionButton` (frontend), ao lado do resumo do grupo nas telas
+    "Meta Supervisor"/"Meta Vendedor".
+  - **Tudo-ou-nada (confirmado com o usuário — pergunta direta sobre bloqueio parcial):** se
+    QUALQUER subgrupo do grupo tiver um filho bloqueando (mesma regra de `_blocking_children_names`
+    — trabalho real, não autogestão nem 0 kg), a operação inteira falha, listando todos os nomes
+    bloqueando de uma vez, e **nada** é resetado — em vez de resetar só os subgrupos livres e pular
+    os travados. Evita um grupo pela metade resetado (alguns subgrupos com sugestão nova, outros
+    com a distribuição antiga), mais difícil de auditar/entender do que uma falha clara.
+  - **Sugestão automática pré-preenche de novo, mas sem se auto-aplicar (confirmado com o
+    usuário):** depois do reset, o frontend chama `groupDraft.ensureLoaded(id, force=true)`
+    (`useGroupSupervisorDraft.ts`) pra cada subgrupo resetado — recarrega a sugestão automática
+    (`RecentAverageDistributionStrategy`, mesma de sempre) e pré-preenche os campos, mas a
+    persistência de fato continua exigindo o mesmo "Salvar distribuição" — sugestão nunca se
+    auto-aplica sozinha, mesma invariante de sempre (ver [[project_goal-suggestion-workflow]]).
+    `force=true` foi necessário porque `useGroupSupervisorDraft` cacheia por `allocationId`
+    (`loadedIds`) pra nunca buscar duas vezes o mesmo contexto — sem o `force`, um subgrupo que já
+    tinha sido visitado ENQUANTO distribuído (`ensureContextLoaded`, sem criar rascunho) nunca
+    dispararia a busca de novo depois do reset, deixando o rascunho em branco sem sugestão.
+  - **Motivo do usuário:** "caso o nível hierárquico errar a distribuição ele tem que começar tudo
+    novamente" — sem essa opção, corrigir um erro que afeta vários/todos os subgrupos de um grupo
+    exigiria resetar um por um manualmente.
+  - Testes: `ReopenGroupServiceTests` (`backend/apps/allocations/test_reopen.py`) e
+    `ResetGroupApiTests` (`backend/apps/allocations/test_api.py`).
+  - **Simplificação de UI (mesmo dia, a pedido do usuário):** com o reset do grupo inteiro
+    disponível, o botão de reset por subgrupo (`ResetDistributionButton`) foi **removido** de
+    dentro de `SupervisorDistributionWorkspace.tsx` (as telas "Meta Supervisor"/"Meta Vendedor") —
+    o usuário achou que ele "só estava atrapalhando" ali, coexistindo com o botão de grupo. O
+    endpoint `POST /allocations/{id}/reopen/` e o componente `ResetDistributionButton` continuam
+    existindo e em uso normal nas outras telas (Distribuir Produtos, Visão Geral,
+    Gerente→Regional/Regional→Local) — a remoção foi só da UI dessas duas telas específicas, nada
+    mudou no backend nem no mecanismo de reset em si (H4).
 
 ## Decisão 9 — Mapeamento texto→entidade para o histórico real (O3): curadoria manual, sem casamento automático por nome
 - **Escolha:** `DistributionBaseline` só tem texto solto do ERP (`subgroup_name`,
@@ -509,6 +698,24 @@ permanece existindo, sem uso ativo, como ponto de extensão caso a decisão mude
   `FeristaCoverage` nenhum. Decisão explícita: não tentar adivinhar o titular dos meses sem
   cobertura cadastrada, mesmo quando o ferista só tem um titular coberto — só o que está
   cadastrado mês a mês vale.
+
+**Revisão 2026-08-28 — redirecionamento do mês corrente passa a acontecer dentro do próprio
+`rebuild()`, não só em `target_history`.** O usuário identificou que o redirecionamento (Decisão
+13 original) só existia em `SalesHistoryProvider.target_history`, consumido pela sugestão
+automática (P1-P4) e pela distribuição — mas telas que leem `DistributionBaseline` direto (ex.:
+`VendorGroupSummaryService`, tabela "Resumo por vendedor e grupo" em Gestão → Pré-processamento)
+nunca aplicavam esse redirecionamento, então o volume do ferista simplesmente não somava em
+lugar nenhum ali (o ferista não tem `ExternalSalespersonMapping`, então nem aparece como linha
+própria). **Escolha:** `DistributionBaselineService.rebuild(today=...)` agora resolve, pra cada
+`FeristaCoverage` cujo `ano`/`mes` bate com o mês/ano do `today` da reconstrução (parâmetro
+opcional, default `date.today()`), o `external_name` cadastrado como `ExternalSalespersonMapping`
+do `covered_node`, e regrava as linhas daquele mês específico direto com o nome do titular — não
+com o nome do ferista. Meses diferentes do atual cadastrados em `FeristaCoverage` continuam **fora**
+do escopo deste redirecionamento (mesma limitação aceita acima, inalterada): só o mês da
+reconstrução é redirecionado aqui, o resto segue dependendo do redirecionamento mês a mês de
+`target_history`. Como as linhas do mês atual já saem daqui com o nome do titular,
+`target_history` não encontra mais linhas do ferista pra esse mês específico e não soma nada em
+dobro.
 
 ---
 

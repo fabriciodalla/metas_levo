@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../api/client";
 import type { GoalAllocation, GroupSuggestion, HierarchyNode, ProductGroup } from "../api/types";
 import { GroupChildDistributionTable } from "./GroupChildDistributionTable";
+import { ResetDistributionButton } from "./ResetDistributionButton";
 import { Sparkline } from "./Sparkline";
 import { useDistributionRows, type DistributionRow } from "./useDistributionRows";
 import { Alert } from "./ui/Alert";
@@ -344,7 +345,10 @@ function GroupRowCard({
 
       {expanded && row.status === "distributed" && row.allocation && (
         <div className="pg-body">
-          <Alert variant="success">Distribuição de {row.groupNome} salva com sucesso.</Alert>
+          <div className="pg-distributed-header">
+            <Alert variant="success">Distribuição de {row.groupNome} salva com sucesso.</Alert>
+            <ResetDistributionButton allocation={row.allocation} onReset={onChanged} />
+          </div>
           <div className="pg-distributed-breakdown">
             {allAllocations
               .filter((a) => a.parent_allocation === row.allocation!.id)
@@ -409,8 +413,11 @@ export function GroupCycleOverview({
       .finally(() => setLoading(false));
   }, [canCreateGoals]);
 
+  // `nodes` inclui nós inativados (o admin precisa vê-los na tela de Hierarquia) — sem o filtro
+  // de `ativo`, um Coordenador removido/substituído (Decisão 10, O4) continuava aparecendo como
+  // alvo de distribuição ao lado de quem ocupa a posição agora.
   const directChildren = useMemo(
-    () => nodes.filter((n) => n.parent === ownerNodeId),
+    () => nodes.filter((n) => n.parent === ownerNodeId && n.ativo),
     [nodes, ownerNodeId],
   );
 

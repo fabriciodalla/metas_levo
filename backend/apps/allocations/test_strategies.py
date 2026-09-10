@@ -5,6 +5,7 @@ from .strategies import (
     LargestRemainderRoundingPolicy,
     ManualDistributionStrategy,
     MonthlyQuantity,
+    RecentAverageDistributionStrategy,
     SeasonalTrendDistributionStrategy,
     SeasonalTrendSuggestionStrategy,
     StrategyNotConfiguredError,
@@ -159,6 +160,50 @@ class SeasonalTrendDistributionStrategyTests(SimpleTestCase):
     def test_target_without_history_gets_zero_weight(self):
         strategy = SeasonalTrendDistributionStrategy(
             history_by_target={1: _monthly_history(2024, 1, [100] * 12)},
+            rounding_policy=LargestRemainderRoundingPolicy(),
+        )
+
+        result = strategy.distribute(total_kg=100, target_ids=[1, 2])
+
+        self.assertEqual(result, {1: 100, 2: 0})
+
+
+class RecentAverageDistributionStrategyTests(SimpleTestCase):
+    """Default do modo `AUTO` em todos os níveis desde 2026-09-03 (ver Decisão 6) — proporção
+    pela média dos últimos 3 meses, com garantia de nunca deixar a sugestão vazia."""
+
+    def test_distributes_proportionally_to_last_3_months_average_and_closes_exactly(self):
+        strategy = RecentAverageDistributionStrategy(
+            history_by_target={
+                1: _monthly_history(2024, 1, [100] * 12),
+                2: _monthly_history(2024, 1, [300] * 12),
+            },
+            rounding_policy=LargestRemainderRoundingPolicy(),
+        )
+
+        result = strategy.distribute(total_kg=100, target_ids=[1, 2])
+
+        self.assertEqual(result, {1: 25, 2: 75})
+
+    def test_splits_equally_when_no_target_has_any_history(self):
+        # Garantia confirmada com o usuário (2026-09-03): mesmo sem NENHUM histórico pra nenhum
+        # alvo, a sugestão nunca fica vazia — reparte em partes iguais em vez de levantar erro.
+        strategy = RecentAverageDistributionStrategy(
+            history_by_target={},
+            rounding_policy=LargestRemainderRoundingPolicy(),
+        )
+
+        result = strategy.distribute(total_kg=100, target_ids=[1, 2, 3])
+
+        self.assertEqual(sum(result.values()), 100)
+        self.assertEqual(result, {1: 34, 2: 33, 3: 33})
+
+    def test_zeroes_targets_below_min_share_and_redistributes_to_the_rest(self):
+        strategy = RecentAverageDistributionStrategy(
+            history_by_target={
+                1: _monthly_history(2024, 1, [900] * 12),
+                2: _monthly_history(2024, 1, [1] * 12),  # ~0.11% do total -> abaixo do piso de 0.5%
+            },
             rounding_policy=LargestRemainderRoundingPolicy(),
         )
 

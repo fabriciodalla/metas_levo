@@ -152,8 +152,11 @@ class UserAccountApiTests(APITestCase):
         """Bug real (2026-07-22): editar cargo/superior criou um nó novo em vez de reaproveitar o
         existente. Causa: `ManyToManyField` sem ordering explícito não garante ordem em `.first()`
         — dependendo da ordem física de inserção no M2M, a posição "principal" podia vir
-        diferente do esperado. `id` crescente = ordem de criação; a posição mais antiga é sempre
-        a principal, não importa em que ordem os `.add()` aconteceram."""
+        diferente do esperado. `.by_seniority()` decide isso hoje (2026-08-07: por senioridade de
+        cargo, não por `id`, ver `test_promoting_someone_...`), mas aqui os dois nós têm níveis
+        diferentes E ordem de criação alinhada com a senioridade (LOCAL é mais antigo e mais
+        sênior que SUPERVISOR) — então este teste continua cobrindo especificamente o bug original do
+        M2M sem ordering, com `id` como critério de desempate."""
         self.client.force_login(self.admin)
         older_node = HierarchyNode.objects.create(
             level=HierarchyNode.Level.LOCAL, nome="Alvo", parent=self.node
@@ -162,7 +165,7 @@ class UserAccountApiTests(APITestCase):
             level=HierarchyNode.Level.SUPERVISOR, nome="Alvo", parent=older_node
         )
         target = User.objects.create_user(username="Alvo", password="x")
-        # Adiciona fora de ordem de criação, de propósito — sem `.order_by("id")` no backend,
+        # Adiciona fora de ordem de criação, de propósito — sem ordering explícito no backend,
         # `.first()` podia devolver `newer_node` aqui (ordem física de inserção no M2M).
         target.hierarchy_nodes.add(newer_node, older_node)
 
@@ -177,6 +180,71 @@ class UserAccountApiTests(APITestCase):
         older_node.refresh_from_db()
         self.assertEqual(older_node.level, HierarchyNode.Level.LOCAL)
         self.assertEqual(older_node.parent_id, self.node.id)
+
+    def test_promoting_someone_to_a_more_senior_position_they_already_hold_as_extra_reuses_it(self):
+        """Cenário real do Fabiano (2026-08-07): tinha Supervisor como principal (criado
+        primeiro), ganhou Coordenador Local como posição extra (adicionada depois, via "Outros
+        cargos" — a promoção), e depois disso editar o "cargo principal" pra Coordenador Local/
+        mesmo superior da posição extra precisa reconhecer que a pessoa JÁ tem esse cargo, em vez
+        de reparentar o nó do Supervisor (mais antigo, porém menos sênior) por cima dele —
+        `.by_seniority()` resolve a posição mais sênior como "principal", não a mais antiga, então
+        esse PATCH vira um no-op sobre o nó que já é Coordenador Local, e o Supervisor sobra livre
+        pra ser removido via "Outros cargos" (o que a promoção de verdade pedia)."""
+        self.client.force_login(self.admin)
+        local_node = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.LOCAL, nome="Alvo", parent=self.node
+        )
+        supervisor_node = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.SUPERVISOR, nome="Alvo", parent=local_node
+        )
+        target = User.objects.create_user(username="Alvo", password="x", hierarchy_node=supervisor_node)
+        target.hierarchy_nodes.add(local_node)
+
+        response = self.client.patch(
+            reverse("user-account-detail", args=[target.id]),
+            {"level": HierarchyNode.Level.LOCAL, "parent_node_id": self.node.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(target.hierarchy_nodes.count(), 2)  # não criou (nem apagou) nó nenhum
+        supervisor_node.refresh_from_db()
+        local_node.refresh_from_db()
+        self.assertEqual(supervisor_node.level, HierarchyNode.Level.SUPERVISOR)  # intocado
+        self.assertEqual(supervisor_node.parent_id, local_node.id)
+        self.assertEqual(local_node.level, HierarchyNode.Level.LOCAL)  # já era isso, no-op
+        # a posição mais sênior (Coordenador Local) agora é a "principal" pro backend
+        self.assertEqual(target.hierarchy_nodes.by_seniority().first().id, local_node.id)
+
+    def test_editing_primary_position_rejects_demotion_that_would_collide_with_a_junior_extra_position(self):
+        """Trava simétrica à de `test_add_position_rejects_exact_duplicate`: `.by_seniority()`
+        só resolve sozinha o caso de promoção (o teste acima) — rebaixar o cargo principal pra
+        um nível/superior que colide com uma posição extra JÚNIOR ainda reparentaria o nó
+        principal (mais sênior) por cima da extra, então essa trava continua necessária."""
+        self.client.force_login(self.admin)
+        local_node = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.LOCAL, nome="Alvo", parent=self.node
+        )
+        target = User.objects.create_user(username="Alvo", password="x", hierarchy_node=local_node)
+        supervisor_node = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.SUPERVISOR, nome="Alvo", parent=local_node
+        )
+        target.hierarchy_nodes.add(supervisor_node)
+
+        response = self.client.patch(
+            reverse("user-account-detail", args=[target.id]),
+            {"level": HierarchyNode.Level.SUPERVISOR, "parent_node_id": local_node.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        # nem a posição principal nem a extra foram tocadas
+        local_node.refresh_from_db()
+        supervisor_node.refresh_from_db()
+        self.assertEqual(local_node.level, HierarchyNode.Level.LOCAL)
+        self.assertEqual(local_node.parent_id, self.node.id)
+        self.assertEqual(supervisor_node.level, HierarchyNode.Level.SUPERVISOR)
+        self.assertTrue(supervisor_node.ativo)
 
     def test_clearing_cargo_deactivates_the_orphaned_position(self):
         """Terceiro caminho pro mesmo bug (2026-07-22): limpar o campo Cargo (`level=None`) pra

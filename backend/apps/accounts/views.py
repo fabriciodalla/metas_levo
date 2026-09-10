@@ -22,9 +22,8 @@ from .serializers import (
     PasswordResetRequestSerializer,
     UserAccountSerializer,
     UserSerializer,
-    deactivate_if_orphaned,
-    resolve_or_create_node,
 )
+from .services import deactivate_if_orphaned, resolve_or_create_node
 
 token_generator = PasswordResetTokenGenerator()
 

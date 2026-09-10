@@ -5,6 +5,7 @@ import type { GoalAllocation } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { DistributionForm } from "../components/DistributionForm";
 import { GroupCycleOverview, STATUS_FILTER_OPTIONS, type StatusFilter } from "../components/GroupCycleOverview";
+import { ResetDistributionButton } from "../components/ResetDistributionButton";
 import { Card } from "../components/ui/Card";
 import { Badge } from "../components/ui/Badge";
 import { Spinner } from "../components/ui/Spinner";
@@ -158,7 +159,10 @@ export function DistributionPage() {
             <EmptyState>Nada pendente no seu nível para este ciclo.</EmptyState>
           )}
           {pending.map((allocation) => {
-            const directChildren = nodes.filter((n) => n.parent === allocation.owner_node);
+            // `nodes` inclui nós inativados (o admin precisa vê-los na tela de Hierarquia) — sem
+            // o filtro de `ativo`, um Coordenador removido/substituído (Decisão 10, O4) continuava
+            // aparecendo como alvo de distribuição ao lado de quem ocupa a posição agora.
+            const directChildren = nodes.filter((n) => n.parent === allocation.owner_node && n.ativo);
             const isExpanded = expandedId === allocation.id;
             return (
               <Card key={allocation.id}>
@@ -194,6 +198,7 @@ export function DistributionPage() {
                       <th>Quantidade</th>
                       <th>Granularidade</th>
                       <th>Status</th>
+                      <th>Ações</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -203,6 +208,9 @@ export function DistributionPage() {
                         <td>{allocation.granularity}</td>
                         <td>
                           <Badge variant="success">Distribuído</Badge>
+                        </td>
+                        <td>
+                          <ResetDistributionButton allocation={allocation} onReset={handleChanged} />
                         </td>
                       </tr>
                     ))}

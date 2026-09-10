@@ -16,6 +16,14 @@ casos encontrados, o cadastro "fantasma" duplicado sempre caía em São Paulo, e
 real de cada código estava em GO/MS/MT. Adicionado `vendedor.ds_estado NOT LIKE '%SAO PAULO%'`
 (mesmo filtro que `ACUMULADO_SQL` já usava em `vend.ds_estado`, agora espelhado aqui) pra excluir
 esse cadastro fantasma do JOIN da carteira.
+
+Dois supervisores novos, `B.F.290` e `B.F.214` (2026-08-07, correção do usuário): adicionados à
+lista de `nk_supervisor` das três CTEs `sup_map_*` de `ACUMULADO_SQL` e ao `IN` de MS de
+`CARTEIRA_SQL` (`B.F.214` já estava nesse `IN`; só `B.F.290` é novo ali). Ver
+`SalesHistorySqlSyntaxTests` em `tests.py` — dois literais de string colados sem vírgula entre
+eles (`'B.F.253''B.F.290'`) formam UM literal só em Postgres (`''` escapa uma aspa dentro da
+string), não dois separados; não dá erro visível na hora de editar, só quando o sync roda contra
+o banco real.
 """
 
 ACUMULADO_SQL = """
@@ -28,7 +36,7 @@ WITH sup_map_geral AS (
     WHERE sv.dt_cancelamento IS NULL
       AND sv.nk_supervisor IN (
             'B.F.434','B.F.292','B.F.80','B.F.229',
-            'B.F.212','B.F.293','B.F.446','B.F.1017','B.F.253'
+            'B.F.212','B.F.293','B.F.446','B.F.1017','B.F.253','B.F.290','B.F.214'
       )
       AND sv.nk_vendedor <> 'B.F.1401'
     GROUP BY
@@ -46,7 +54,7 @@ sup_map_1401_ativo AS (
       AND sv.dt_cancelamento IS NULL
       AND sv.nk_supervisor IN (
             'B.F.434','B.F.292','B.F.80','B.F.229',
-            'B.F.212','B.F.293','B.F.446','B.F.1017','B.F.253'
+            'B.F.212','B.F.293','B.F.446','B.F.1017','B.F.253','B.F.290','B.F.214'
       )
     GROUP BY
         sv.nk_vendedor,
@@ -63,7 +71,7 @@ sup_map_1401_cancelado AS (
       AND sv.dt_cancelamento IS NOT NULL
       AND sv.nk_supervisor IN (
             'B.F.434','B.F.292','B.F.80','B.F.229',
-            'B.F.212','B.F.293','B.F.446','B.F.1017','B.F.253'
+            'B.F.212','B.F.293','B.F.446','B.F.1017','B.F.253','B.F.290','B.F.214'
       )
     GROUP BY
         sv.nk_vendedor,
@@ -372,7 +380,7 @@ WHERE endereco.st_ativo = 'S'
         (sup_map.nk_supervisor = 'B.F.229'
          AND endereco.sg_estado = 'GO')
 
-     OR (sup_map.nk_supervisor IN ('B.F.434','B.F.212','B.F.293','B.F.446','B.F.214','B.F.292')
+     OR (sup_map.nk_supervisor IN ('B.F.434','B.F.212','B.F.293','B.F.446','B.F.214','B.F.292','B.F.290')
          AND endereco.sg_estado = 'MS')
 
      OR (sup_map.nk_supervisor = 'B.F.212'

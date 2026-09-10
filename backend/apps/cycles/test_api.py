@@ -88,6 +88,32 @@ class CycleApiTests(APITestCase):
 
         self.assertIn(response.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
 
+    def test_open_rejects_non_admin(self):
+        response = self.client.post(reverse("cycle-open"), {"ano": 2026, "mes": 8})
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_open_creates_cycle_for_admin(self):
+        admin = User.objects.create_user(username="admin", password="x", is_admin=True)
+        self.client.force_login(admin)
+
+        response = self.client.post(reverse("cycle-open"), {"ano": 2026, "mes": 8})
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["ano"], 2026)
+        self.assertEqual(response.data["mes"], 8)
+        self.assertEqual(response.data["status"], Cycle.Status.ABERTO)
+        self.assertTrue(Cycle.objects.filter(ano=2026, mes=8).exists())
+
+    def test_open_rejects_month_that_already_has_a_cycle(self):
+        admin = User.objects.create_user(username="admin", password="x", is_admin=True)
+        self.client.force_login(admin)
+
+        response = self.client.post(reverse("cycle-open"), {"ano": self.cycle.ano, "mes": self.cycle.mes})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("detail", response.data)
+
     def test_completeness_reports_stuck_allocation(self):
         response = self.client.get(reverse("cycle-completeness", kwargs={"pk": self.cycle.pk}))
 
@@ -101,6 +127,13 @@ class CycleApiTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.cycle.refresh_from_db()
         self.assertEqual(self.cycle.status, Cycle.Status.ABERTO)
+
+    def test_close_force_succeeds_despite_incomplete_cycle(self):
+        response = self.client.post(reverse("cycle-close", kwargs={"pk": self.cycle.pk}), {"force": True})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.cycle.refresh_from_db()
+        self.assertEqual(self.cycle.status, Cycle.Status.FECHADO)
 
     def test_close_succeeds_when_complete(self):
         vendedor = HierarchyNode.objects.create(

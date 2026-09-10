@@ -4,6 +4,7 @@ from apps.hierarchy.models import HierarchyNode
 from apps.hierarchy.serializers import HierarchyNodeSerializer
 
 from .models import User
+from .services import deactivate_if_orphaned, sync_primary_position
 
 
 class HierarchyNodeSummarySerializer(serializers.ModelSerializer):
@@ -23,7 +24,7 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ["id", "username", "email", "is_admin", "hierarchy_nodes"]
 
     def get_hierarchy_nodes(self, obj):
-        return HierarchyNodeSummarySerializer(obj.hierarchy_nodes.order_by("id"), many=True).data
+        return HierarchyNodeSummarySerializer(obj.hierarchy_nodes.by_seniority(), many=True).data
 
 
 class LoginSerializer(serializers.Serializer):
@@ -46,57 +47,10 @@ class PasswordChangeSerializer(serializers.Serializer):
     new_password = serializers.CharField(write_only=True)
 
 
-def deactivate_if_orphaned(node: HierarchyNode, changed_by) -> None:
-    """Se ninguém mais ocupa `node` (nenhum usuário ativo vinculado), desativa e dispara a mesma
-    reatribuição automática de meta em ciclo aberto que qualquer outra desativação de nó já
-    dispara (O4/Decisão 10). Ponto único pra essa regra — antes duplicada (e uma cópia
-    incompleta) em três lugares: `remove_position`, `_sync_position` com `level=None`, e
-    desligar/readmitir usuário. Bug real, 2026-07-22: um nó desvinculado (posição removida, cargo
-    limpo, ou usuário desligado) continuava `ativo=True`, contando como ocupado sem ninguém lá.
-    """
-    if not node.ativo or node.users.filter(is_active=True).exists():
-        return
-
-    # Import tardio: allocations importa hierarchy.models, evita ciclo com accounts.
-    from apps.allocations.services import HierarchyChangeReassignmentService
-
-    previous = HierarchyNode.objects.get(pk=node.pk)
-    node.ativo = False
-    node.save(update_fields=["ativo", "updated_at"])
-    HierarchyChangeReassignmentService.detect_and_reassign_if_needed(previous, node, changed_by=changed_by)
-
-
-def resolve_or_create_node(user: User, level: str, parent_node: HierarchyNode | None) -> HierarchyNode:
-    """Encontra o `HierarchyNode` certo pra uma posição nova de `user` em `level`/`parent_node`,
-    ou cria um — nunca reaproveita um nó já ocupado por outro usuário.
-
-    Compartilhado entre `UserAccountSerializer` (posição inicial, no create/update) e
-    `UserAccountViewSet.add_position` (posições adicionais — múltiplos cargos pelo mesmo
-    usuário, Decisão 10/O5 revisada, ver docs/decisions.md).
-    """
-    reusable = HierarchyNode.objects.filter(
-        level=level, parent=parent_node, nome__iexact=user.username, users__isnull=True
-    ).first()
-    if reusable is not None:
-        if not reusable.ativo:
-            # Reaproveitar um nó desativado (ex.: reset de hierarquia) precisa reativá-lo —
-            # senão o cadastro "funciona" mas a pessoa some da árvore ativa.
-            reusable.ativo = True
-            reusable.save(update_fields=["ativo", "updated_at"])
-        user.hierarchy_nodes.add(reusable)
-        return reusable
-
-    node_data = {"level": level, "parent": parent_node.id if parent_node else None, "nome": user.username}
-    node_serializer = HierarchyNodeSerializer(data={**node_data, "ativo": True})
-    node_serializer.is_valid(raise_exception=True)
-    node = node_serializer.save()
-    user.hierarchy_nodes.add(node)
-    return node
-
-
 class AddUserPositionSerializer(serializers.Serializer):
     """Posição adicional pra um usuário que já existe — mesma resolução de nó de
-    `resolve_or_create_node`, sem mexer nas posições que a pessoa já tem (Decisão 10/O5
+    `resolve_or_create_node` (`apps.accounts.services`), sem mexer nas posições que a pessoa já
+    tem (Decisão 10/O5
     revisada, 2026-07-21): ela pode acumular cargos em ramos diferentes da árvore (ex.: um
     Coordenador Local que também é Supervisor de outro ramo).
 
@@ -160,7 +114,7 @@ class UserAccountSerializer(serializers.ModelSerializer):
         ]
 
     def get_hierarchy_nodes(self, obj):
-        return HierarchyNodeSerializer(obj.hierarchy_nodes.order_by("id"), many=True).data
+        return HierarchyNodeSerializer(obj.hierarchy_nodes.by_seniority(), many=True).data
 
     def validate(self, attrs):
         if self.instance is None and not attrs.get("password"):
@@ -197,7 +151,7 @@ class UserAccountSerializer(serializers.ModelSerializer):
             # 2026-07-24: um PATCH só com `parent_node_id` (sem `level`) respondia 200 sem mover
             # o nó — a UI nunca aciona esse caminho (sempre reenvia os dois juntos), mas a API
             # aceitava silenciosamente sem efeito.
-            existing = instance.hierarchy_nodes.order_by("id").first()
+            existing = instance.hierarchy_nodes.by_seniority().first()
             if not has_level:
                 level = existing.level if existing else None
             if not has_parent:
@@ -229,47 +183,8 @@ class UserAccountSerializer(serializers.ModelSerializer):
             node.save(update_fields=["ativo", "updated_at"])
 
     def _sync_position(self, user, level, parent_node):
-        """Cria/atualiza em lugar a posição "principal" deste usuário (a primeira, se ele tiver
-        mais de uma — Decisão 10/O5 revisada, posições extras são `UserAccountViewSet.
-        add_position`/`remove_position`, não passam por aqui). `level=None` desvincula essa
-        posição principal (Administrador sem posição, ou quem só tinha uma e perdeu ela), sem
-        apagar o nó, pra não perder o histórico de `parent` referenciado por alocações/closure
-        passadas.
-        """
-        # `.order_by("id")` é o que garante que "a primeira posição" seja sempre a mesma entre
-        # esta chamada e o que a API devolve pro frontend (`get_hierarchy_nodes` acima) — sem
-        # isso, um M2M sem ordering explícito não tem ordem garantida em `.first()` (mesmo que,
-        # na prática, o Postgres costume devolver em ordem de inserção pra consultas simples —
-        # não é uma garantia documentada, só um efeito colateral do plano de execução; bug real
-        # que isso corrigiu: editar cargo criava um nó novo em vez de reaproveitar o existente,
-        # 2026-07-22).
-        existing = user.hierarchy_nodes.order_by("id").first()
-
-        if level is None:
-            if existing is not None:
-                user.hierarchy_nodes.remove(existing)
-                changed_by = getattr(self.context.get("request"), "user", None)
-                deactivate_if_orphaned(existing, changed_by)
-            return
-
-        node_data = {"level": level, "parent": parent_node.id if parent_node else None, "nome": user.username}
-
-        if existing is None:
-            resolve_or_create_node(user, level, parent_node)
-            return
-
+        """Delega pra `sync_primary_position` (`apps.accounts.services`) — a regra de qual
+        posição é "principal", criação/reaproveitamento de nó e disparo de reassignment de
+        hierarquia moram lá; aqui só resolve `changed_by` a partir do contexto da request."""
         changed_by = getattr(self.context.get("request"), "user", None)
-        # partial=True mas inclui `nome`: cargo/superior podem mudar (reparenta o mesmo nó em
-        # vez de criar outro) e o nome do nó sempre acompanha o `username` — trocar a pessoa
-        # numa posição existente é só editar nome/login dela, sem mexer em cargo/superior.
-        previous = HierarchyNode.objects.get(pk=existing.pk)
-        node_serializer = HierarchyNodeSerializer(instance=existing, data=node_data, partial=True)
-        node_serializer.is_valid(raise_exception=True)
-        node = node_serializer.save()
-
-        # Import tardio: allocations importa hierarchy.models, evita ciclo com accounts.
-        from apps.allocations.services import HierarchyChangeReassignmentService
-
-        HierarchyChangeReassignmentService.detect_and_reassign_if_needed(
-            previous, node, changed_by=changed_by
-        )
+        sync_primary_position(user, level, parent_node, changed_by)

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
-type Tone = "neutral" | "success" | "warning" | "danger";
-type Size = "sm" | "md" | "lg" | "xl";
+type Tone = "neutral" | "primary" | "success" | "warning" | "danger";
+type Size = "sm" | "md" | "lg" | "xl" | "2xl";
 
 interface Props {
   label: string;

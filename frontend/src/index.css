@@ -923,17 +923,6 @@ button {
   background: var(--color-accent);
 }
 
-.stat-tile-value {
-  font-size: var(--text-3xl);
-  font-weight: 900;
-  color: var(--color-primary);
-}
-
-.stat-tile-label {
-  font-size: var(--text-sm);
-  color: var(--color-text-muted);
-}
-
 /* ---------- Resumo executivo (cards de topo da tela Distribuir Metas) ---------- */
 
 .summary-row {
@@ -1133,6 +1122,38 @@ button {
   pointer-events: none;
 }
 
+/* ---------- Input de percentual de crescimento (PercentGrowthInput) ---------- */
+
+.pct-input {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+}
+
+.pct-input input {
+  width: 100%;
+  padding-right: 28px;
+  text-align: right;
+  font-weight: 700;
+}
+
+.pct-input-positive input {
+  color: var(--color-success);
+}
+
+.pct-input-negative input {
+  color: var(--color-danger);
+}
+
+.pct-input-suffix {
+  position: absolute;
+  right: var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  pointer-events: none;
+}
+
 /* ---------- Skeleton (carregamento) ---------- */
 
 .skeleton {
@@ -1240,6 +1261,18 @@ button {
   padding: 0 var(--space-5) var(--space-5);
   border-top: 1px solid var(--color-border);
   padding-top: var(--space-4);
+}
+
+.pg-distributed-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.pg-distributed-header .alert {
+  flex: 1;
+  margin-bottom: 0;
 }
 
 .pg-distributed-breakdown {
@@ -1486,18 +1519,15 @@ button {
   font-size: var(--text-sm);
 }
 
-/* A página inteira preenche o viewport (abaixo da topbar) sem rolar — só a tabela dentro do
-   workspace tem rolagem própria, com cabeçalho e resumo sempre visíveis. 64px cobre a topbar com
-   subtítulo (duas linhas) desta rota, um pouco mais alta que --topbar-height (só uma linha). */
+/* A página segue o fluxo normal da tela (rola junto com o resto, sem altura travada no viewport).
+   A tentativa anterior de travar a altura no viewport e só rolar a tabela por dentro espremia o
+   card de distribuição até sobrar ~2 linhas de subgrupo visíveis e, quando o conteúdo não cabia
+   mesmo assim, a seção "Já dividido" de baixo acabava sobrepondo o resumo da tabela em vez de
+   descer. Com espaço de sobra na tela, é mais simples deixar a página crescer/rolar normalmente. */
 .dp-produtos-shell {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  height: calc(100vh - 64px - (var(--space-6) * 2));
-  min-height: 520px;
-  /* Rede de segurança: se o conteúdo não couber (viewport muito baixo, texto de erro extra etc.),
-     a própria seção rola em vez de sobrepor o resumo/mensagem por cima da tabela. */
-  overflow-y: auto;
+  gap: var(--space-6);
 }
 
 .dp-produtos-shell .summary-row {
@@ -1527,12 +1557,6 @@ button {
   flex: 0 0 auto;
 }
 
-.dp-produtos-shell .ssw-panel {
-  flex: 1;
-  min-height: 0;
-  gap: var(--space-3);
-}
-
 .dp-produtos-shell .ssw-panel > .alert {
   /* mesma razão do .dp-filters acima: o gap do flex column já espaça, a margem própria do Alert
      só duplicaria. */
@@ -1545,11 +1569,6 @@ button {
 }
 
 .dp-workspace-card {
-  flex: 1;
-  /* Nunca encolhe abaixo do que cabeçalho + resumo + uma tabela mínima precisam — em telas baixas
-     é a própria .dp-produtos-shell que rola (ver overflow-y acima), em vez do card espremer até
-     sobrepor o conteúdo. */
-  min-height: 320px;
   display: flex;
   flex-direction: column;
   background: var(--color-surface);
@@ -1559,26 +1578,13 @@ button {
   padding: var(--space-4);
 }
 
+/* Com poucos subgrupos a tabela some sozinha (sem sobra de espaço vazio); com muitos (a tela
+   permite até 20+), passa a rolar por dentro depois da 7ª linha em vez de esticar a página
+   indefinidamente — 480px ≈ cabeçalho (40px) + 7 linhas (~63px cada). */
 .dp-table-scroll {
-  flex: 1;
-  min-height: 160px;
+  max-height: 480px;
   overflow-y: auto;
   margin-bottom: 0;
-}
-
-@media (max-width: 900px) {
-  .dp-produtos-shell {
-    height: auto;
-    min-height: 0;
-  }
-
-  .dp-workspace-card {
-    flex: none;
-  }
-
-  .dp-table-scroll {
-    max-height: 60vh;
-  }
 }
 
 /* `border-collapse: collapse` (regra global de table.table) quebra `position: sticky` nos `th` —
@@ -1718,6 +1724,10 @@ button {
   flex-shrink: 0;
 }
 
+.allocation-status-filters select {
+  width: 230px;
+}
+
 /* ---------- Tables ---------- */
 
 .table-wrap {
@@ -1853,8 +1863,17 @@ table.table tbody tr:hover {
   font-weight: 700;
 }
 
+.metric-chip-value-2xl {
+  font-size: var(--text-3xl);
+  font-weight: 700;
+}
+
 .metric-chip-value-neutral {
   color: inherit;
+}
+
+.metric-chip-value-primary {
+  color: var(--color-primary);
 }
 
 .metric-chip-value-success {
@@ -3126,6 +3145,15 @@ legend {
    flui normalmente e cresce com o conteúdo — travar em 100vh espremia o carrossel de supervisores
    de forma imprevisível conforme zoom/resolução. Só a lista de subgrupos tem altura própria
    (ver .sv-sidebar abaixo), com rolagem interna independente do tamanho da janela. */
+/* O wrapper genérico `.page` (compartilhado por toda rota sob NivelLayout) trava em 1180px — bom
+   pra telas de formulário simples, mas aqui sobra bastante espaço em branco à direita numa tela
+   de notebook/monitor comum: a lateral de subgrupos é fixa (400px) e o carrossel de 2 cards fica
+   apertado demais no que resta. Alarga só a página que contém esta tela (Meta Supervisor/Meta
+   Vendedor), sem mexer no `.page` genérico usado por outras rotas. */
+.page:has(.sv-shell) {
+  max-width: 1600px;
+}
+
 .sv-shell {
   display: flex;
   flex-direction: column;
@@ -3293,7 +3321,7 @@ legend {
   color: var(--color-warning);
 }
 
-/* ---- Área principal: carrossel de supervisores ---- */
+/* ---- Área principal: cards de supervisores ---- */
 
 .sv-workspace {
   flex: 1;
@@ -3321,12 +3349,57 @@ legend {
   margin: 0;
 }
 
+/* Sempre 2 cards inteiros lado a lado — nunca um terceiro cortado na borda (que era o problema do
+   scroll horizontal livre: o último card ficava só uma lasca visível). Setas ao lado deslizam
+   exatamente um card por vez; `scroll-snap` garante que o carrossel nunca pare com um card pela
+   metade, e a rolagem nativa fica escondida porque as setas já cobrem a navegação. */
+.sv-carousel-shell {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.sv-carousel-arrow {
+  flex: 0 0 auto;
+  width: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background var(--transition-fast), opacity var(--transition-fast);
+}
+
+.sv-carousel-arrow:hover:not(:disabled) {
+  background: var(--gray-50);
+}
+
+.sv-carousel-arrow:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.sv-carousel-wrap {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .sv-carousel {
   display: flex;
   gap: var(--space-4);
   overflow-x: auto;
-  padding: var(--space-1) var(--space-1) var(--space-3);
+  scroll-snap-type: x mandatory;
   scroll-behavior: smooth;
+  padding: var(--space-1);
+  scrollbar-width: none;
+}
+
+.sv-carousel::-webkit-scrollbar {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3336,8 +3409,9 @@ legend {
 }
 
 .sv-card {
-  flex: 0 0 300px;
-  width: 300px;
+  flex: 0 0 calc(50% - (var(--space-4) / 2));
+  min-width: 300px;
+  scroll-snap-align: start;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -3346,6 +3420,13 @@ legend {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
   padding: var(--space-4);
+}
+
+@media (max-width: 900px) {
+  .sv-card {
+    flex: 0 0 88%;
+    min-width: 0;
+  }
 }
 
 .sv-card-inactive {
@@ -3404,6 +3485,35 @@ legend {
   background: var(--color-border);
 }
 
+/* Média (fixa) e % de crescimento (editável) sobre ela — as duas faces do valor de meta definido
+   logo abaixo; editar um recalcula o outro (ver SupervisorCard.tsx). */
+.sv-card-growth {
+  display: flex;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+.sv-card-growth-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.sv-card-growth-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+}
+
+.sv-card-growth-value {
+  font-size: var(--text-md);
+  font-weight: 700;
+}
+
 .sv-card-row {
   display: flex;
   flex-direction: column;
@@ -3421,33 +3531,6 @@ legend {
   max-width: none;
 }
 
-.sv-card-footer {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--color-border);
-}
-
-.sv-card-footer-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
-.sv-card-footer-label {
-  font-size: var(--text-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--color-text-muted);
-}
-
-.sv-card-footer-value {
-  font-size: var(--text-sm);
-  font-weight: 900;
-}
-
 /* ---- Resumo fixo inferior do subgrupo selecionado ---- */
 
 .sv-sticky-summary {
@@ -3463,18 +3546,6 @@ legend {
     flex: 0 0 auto;
     width: 100%;
     max-height: 260px;
-  }
-
-  .sv-card {
-    flex: 0 0 260px;
-    width: 260px;
-  }
-}
-
-@media (max-width: 640px) {
-  .sv-card {
-    flex: 0 0 88%;
-    width: 88%;
   }
 }
 

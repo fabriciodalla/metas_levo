@@ -19,8 +19,24 @@ export function NivelOverviewPage() {
 
   const myNodeIds = useMemo(() => new Set(user?.hierarchy_nodes.map((n) => n.id) ?? []), [user]);
 
+  // Quando o próprio nó quebra uma alocação GROUP em SUBGROUP (tela "Distribuir Produtos"), o
+  // dono continua o mesmo nos dois — sem excluir a linha-pai, ela e as linhas-filhas somariam o
+  // mesmo kg duas vezes em "Sua meta neste ciclo".
+  const selfSplitParentIds = useMemo(() => {
+    const byId = new Map(allocations.map((a) => [a.id, a]));
+    const ids = new Set<number>();
+    for (const a of allocations) {
+      if (a.parent_allocation == null || !myNodeIds.has(a.owner_node)) continue;
+      const parent = byId.get(a.parent_allocation);
+      if (parent && myNodeIds.has(parent.owner_node)) {
+        ids.add(parent.id);
+      }
+    }
+    return ids;
+  }, [allocations, myNodeIds]);
+
   const totalKg = allocations
-    .filter((a) => myNodeIds.has(a.owner_node))
+    .filter((a) => myNodeIds.has(a.owner_node) && !selfSplitParentIds.has(a.id))
     .reduce((sum, a) => sum + a.quantity_kg, 0);
   const kgNoVendedor = allocations
     .filter((a) => a.owner_node_level === "VENDEDOR")

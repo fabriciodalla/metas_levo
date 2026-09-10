@@ -31,6 +31,12 @@ export function useCycleAllocationsData() {
   }, [selectedCycleId]);
 
   function refresh() {
+    // Recarrega `nodes` junto com `allocations` — não só o que a ação acabou de mudar. Bug real
+    // (2026-08-07): um Supervisor novo (ex.: adicionado em "Gestão → Usuários", outra aba/rota)
+    // não aparecia como alvo de distribuição nesta tela mesmo depois da pessoa "sincronizar"
+    // (chamar `refresh()` após distribuir outro subgrupo) — a árvore ficava presa no snapshot do
+    // primeiro carregamento da tela, e só um reload completo da página trazia o nó novo.
+    void api.get<HierarchyNode[]>("/hierarchy/nodes/").then(setNodes);
     if (selectedCycleId === null) return;
     void api.get<GoalAllocation[]>(`/allocations/?cycle=${selectedCycleId}`).then(setAllocations);
   }
