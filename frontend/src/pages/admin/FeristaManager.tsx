@@ -35,7 +35,7 @@ function CoverageModal({
   onSaved: () => void;
 }) {
   const now = new Date();
-  const [externalName, setExternalName] = useState(coverage?.external_name ?? "");
+  const [coveringNode, setCoveringNode] = useState<number | "">(coverage?.covering_node ?? "");
   const [coveredNode, setCoveredNode] = useState<number | "">(coverage?.covered_node ?? "");
   const [ano, setAno] = useState(coverage?.ano ?? now.getFullYear());
   const [mes, setMes] = useState(coverage?.mes ?? now.getMonth() + 1);
@@ -47,7 +47,7 @@ function CoverageModal({
     setSaving(true);
     setError(null);
     try {
-      const payload = { external_name: externalName.trim().toUpperCase(), covered_node: coveredNode, ano, mes };
+      const payload = { covering_node: coveringNode, covered_node: coveredNode, ano, mes };
       if (coverage === null) {
         await api.post("/hierarchy/ferista-coverages/", payload);
       } else {
@@ -62,26 +62,38 @@ function CoverageModal({
   }
 
   return (
-    <Modal title={coverage === null ? "Nova cobertura de férias" : `Editando cobertura de ${coverage.external_name}`} onClose={onClose}>
+    <Modal
+      title={coverage === null ? "Nova cobertura de férias" : `Editando cobertura de ${coverage.covering_node_nome}`}
+      onClose={onClose}
+    >
       <form onSubmit={(e) => void handleSubmit(e)}>
         <div className="field">
-          <label className="field-label" htmlFor="ferista-nome">
-            Nome do ferista (como aparece no sistema de vendas)
-          </label>
-          <input
-            id="ferista-nome"
-            value={externalName}
-            onChange={(e) => setExternalName(e.target.value)}
-            required
-            autoFocus
-          />
-        </div>
-        <div className="field">
           <label className="field-label" htmlFor="ferista-cobrindo">
-            Vendedor coberto
+            Ferista (quem vai receber a meta nesse período)
           </label>
           <select
             id="ferista-cobrindo"
+            value={coveringNode}
+            onChange={(e) => setCoveringNode(e.target.value ? Number(e.target.value) : "")}
+            required
+            autoFocus
+          >
+            <option value="" disabled>
+              Selecione…
+            </option>
+            {vendedores.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.nome}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label className="field-label" htmlFor="ferista-coberto">
+            Titular de férias (o histórico dele vira a base da sugestão do ferista)
+          </label>
+          <select
+            id="ferista-coberto"
             value={coveredNode}
             onChange={(e) => setCoveredNode(e.target.value ? Number(e.target.value) : "")}
             required
@@ -163,7 +175,8 @@ export function FeristaManager() {
     const term = nameFilter.trim().toLowerCase();
     if (!term) return coverages;
     return coverages.filter(
-      (c) => c.external_name.toLowerCase().includes(term) || c.covered_node_nome.toLowerCase().includes(term),
+      (c) =>
+        c.covering_node_nome.toLowerCase().includes(term) || c.covered_node_nome.toLowerCase().includes(term),
     );
   }, [coverages, nameFilter]);
 
@@ -193,8 +206,9 @@ export function FeristaManager() {
         }
       >
         <p className="text-muted mt-0">
-          Vendedor que cobre férias de outro vendedor num mês específico — o volume vendido nesse mês passa a
-          contar pro histórico do vendedor coberto, não pra ninguém mais.
+          Vendedor que cobre férias de outro num mês específico e recebe meta própria nesse período — o
+          histórico do titular coberto vira a base da sugestão de meta do ferista, e o titular sai da
+          distribuição enquanto durar a cobertura.
         </p>
         <div className="filter-bar">
           <div className="field-input-icon">
@@ -213,7 +227,7 @@ export function FeristaManager() {
             <thead>
               <tr>
                 <th>Ferista</th>
-                <th>Cobrindo</th>
+                <th>Titular coberto</th>
                 <th>Mês/Ano</th>
                 <th></th>
               </tr>
@@ -228,7 +242,7 @@ export function FeristaManager() {
               )}
               {filteredCoverages.map((coverage) => (
                 <tr key={coverage.id}>
-                  <td>{coverage.external_name}</td>
+                  <td>{coverage.covering_node_nome}</td>
                   <td>
                     <Badge variant="neutral">{coverage.covered_node_nome}</Badge>
                   </td>

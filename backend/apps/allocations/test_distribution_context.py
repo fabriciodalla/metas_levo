@@ -6,7 +6,7 @@ from rest_framework.test import APITestCase
 
 from apps.catalog.models import ExternalProductMapping, Product, ProductGroup, ProductSubgroup
 from apps.cycles.models import Cycle
-from apps.hierarchy.models import ExternalSalespersonMapping, HierarchyNode
+from apps.hierarchy.models import ExternalSalespersonMapping, FeristaCoverage, HierarchyNode
 from apps.sales_history.models import DistributionBaseline
 
 from .models import GoalAllocation
@@ -185,6 +185,61 @@ class DistributionContextServiceTests(TestCase):
         )
 
         self.assertEqual(DistributionContextService.build(product_allocation), [])
+
+
+class DistributionContextServiceFeristaCoverageTests(TestCase):
+    """Decisão 13, revisão 2026-09-10: titular de férias sai da lista de alvos de distribuição
+    Supervisor→Vendedor pro ciclo coberto — só o ferista aparece, sem duplicidade de meta."""
+
+    def setUp(self):
+        self.group = ProductGroup.objects.create(nome="Embutidos")
+        self.subgroup = ProductSubgroup.objects.create(nome="Linguiça", group=self.group)
+        ExternalProductMapping.objects.create(external_code="LINGUICA", subgroup=self.subgroup)
+
+        self.cycle = Cycle.objects.create(ano=2026, mes=8)
+
+        self.supervisor = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.SUPERVISOR, nome="Supervisor"
+        )
+        self.titular = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.VENDEDOR, nome="Titular", parent=self.supervisor
+        )
+        self.ferista = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.VENDEDOR, nome="Ferista", parent=self.supervisor
+        )
+        ExternalSalespersonMapping.objects.create(external_name="TITULAR", hierarchy_node=self.titular)
+        ExternalSalespersonMapping.objects.create(external_name="FERISTA", hierarchy_node=self.ferista)
+
+    def test_covered_titular_is_excluded_from_distribution_targets_for_the_cycle(self):
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2026, mes=8)
+        allocation = GoalAllocation.objects.create(
+            cycle=self.cycle,
+            owner_node=self.supervisor,
+            granularity=GoalAllocation.Granularity.SUBGROUP,
+            subgroup=self.subgroup,
+            quantity_kg=100,
+            criado_por=User.objects.create_user(username="sup1", password="x"),
+        )
+
+        contexts = DistributionContextService.build(allocation)
+
+        self.assertEqual({ctx.owner_node_id for ctx in contexts}, {self.ferista.id})
+
+    def test_titular_reappears_in_a_cycle_without_coverage_registered(self):
+        # Cobertura cadastrada só pra julho — o ciclo sendo distribuído é agosto.
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2026, mes=7)
+        allocation = GoalAllocation.objects.create(
+            cycle=self.cycle,
+            owner_node=self.supervisor,
+            granularity=GoalAllocation.Granularity.SUBGROUP,
+            subgroup=self.subgroup,
+            quantity_kg=100,
+            criado_por=User.objects.create_user(username="sup2", password="x"),
+        )
+
+        contexts = DistributionContextService.build(allocation)
+
+        self.assertEqual({ctx.owner_node_id for ctx in contexts}, {self.titular.id, self.ferista.id})
 
 
 class DistributionContextApiTests(APITestCase):

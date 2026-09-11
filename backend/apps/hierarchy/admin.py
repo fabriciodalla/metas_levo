@@ -5,8 +5,8 @@ from .models import ExternalSalespersonMapping, FeristaCoverage, HierarchyClosur
 
 @admin.register(HierarchyNode)
 class HierarchyNodeAdmin(admin.ModelAdmin):
-    list_display = ("nome", "level", "parent", "ativo")
-    list_filter = ("level", "ativo")
+    list_display = ("nome", "level", "parent", "ativo", "is_representante")
+    list_filter = ("level", "ativo", "is_representante")
     search_fields = ("nome",)
 
     def save_model(self, request, obj, form, change):
@@ -35,6 +35,6 @@ class ExternalSalespersonMappingAdmin(admin.ModelAdmin):
 
 @admin.register(FeristaCoverage)
 class FeristaCoverageAdmin(admin.ModelAdmin):
-    list_display = ("external_name", "covered_node", "mes", "ano")
+    list_display = ("covering_node", "covered_node", "mes", "ano")
     list_filter = ("ano", "mes")
-    search_fields = ("external_name", "covered_node__nome")
+    search_fields = ("covering_node__nome", "covered_node__nome")

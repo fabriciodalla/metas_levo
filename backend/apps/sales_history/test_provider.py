@@ -185,69 +185,115 @@ class SalesHistoryProviderEndToEndStrategyTests(TestCase):
 
 
 class SalesHistoryProviderFeristaCoverageTests(TestCase):
-    """Decisão 13 (2026-07-22): volume vendido em nome do ferista, num mês coberto, conta pro nó
-    do titular coberto naquele mês específico — fora disso, o nome do ferista não conta pra
-    ninguém, igual qualquer nome sem `ExternalSalespersonMapping`."""
+    """Decisão 13, revisão 2026-09-10: histórico do titular, num mês coberto, conta pro nó do
+    ferista que está cobrindo (base pra sugestão de meta do ferista) — fora disso, cada um conta
+    só o próprio histórico, igual qualquer Vendedor mapeado normalmente."""
 
     def setUp(self):
         self.group = ProductGroup.objects.create(nome="Embutidos")
         self.subgroup = ProductSubgroup.objects.create(nome="Linguiça", group=self.group)
         ExternalProductMapping.objects.create(external_code="LINGUICA", subgroup=self.subgroup)
 
-        self.titular = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Titular")
+        self.supervisor = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.SUPERVISOR, nome="Supervisor"
+        )
+        self.titular = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.VENDEDOR, nome="Titular", parent=self.supervisor
+        )
         ExternalSalespersonMapping.objects.create(external_name="TITULAR", hierarchy_node=self.titular)
+        self.ferista = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.VENDEDOR, nome="Ferista", parent=self.supervisor
+        )
+        ExternalSalespersonMapping.objects.create(external_name="FERISTA", hierarchy_node=self.ferista)
 
         for mes in range(1, 13):
             _baseline(2025, mes, "TITULAR", "LINGUICA", 100)
 
-    def test_covered_month_adds_ferista_volume_to_titular(self):
-        _baseline(2025, 6, "FERISTA", "LINGUICA", 50)
-        FeristaCoverage.objects.create(external_name="FERISTA", covered_node=self.titular, ano=2025, mes=6)
+    def test_covered_month_adds_titular_volume_to_ferista(self):
+        _baseline(2025, 6, "FERISTA", "LINGUICA", 50)  # ferista já vendia algo em nome próprio
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2025, mes=6)
+
+        history = SalesHistoryProvider.target_history(
+            self.ferista.id, period_months=12, last_month=(2025, 12), group_id=self.group.id
+        )
+
+        by_month = {(p.ano, p.mes): p.quantity_kg for p in history}
+        self.assertEqual(by_month[(2025, 6)], 150.0)  # 50 do ferista + 100 do titular coberto
+        self.assertEqual(by_month[(2025, 7)], 0.0)  # mês sem cobertura, ferista não vendeu nada
+
+    def test_titular_volume_outside_covered_month_does_not_count_for_ferista(self):
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2025, mes=6)
+
+        history = SalesHistoryProvider.target_history(
+            self.ferista.id, period_months=12, last_month=(2025, 12), group_id=self.group.id
+        )
+
+        by_month = {(p.ano, p.mes): p.quantity_kg for p in history}
+        self.assertEqual(by_month[(2025, 7)], 0.0)  # julho não é coberto, os 100 do titular ficam só com ele
+
+    def test_titular_own_history_is_unaffected_by_being_covered(self):
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2025, mes=6)
 
         history = SalesHistoryProvider.target_history(
             self.titular.id, period_months=12, last_month=(2025, 12), group_id=self.group.id
         )
 
         by_month = {(p.ano, p.mes): p.quantity_kg for p in history}
-        self.assertEqual(by_month[(2025, 6)], 150.0)  # 100 do titular + 50 do ferista
-        self.assertEqual(by_month[(2025, 7)], 100.0)  # mês sem cobertura, só o titular
+        self.assertEqual(by_month[(2025, 6)], 100.0)  # titular continua com o próprio histórico
 
-    def test_ferista_volume_outside_covered_month_does_not_count(self):
-        _baseline(2025, 7, "FERISTA", "LINGUICA", 999)  # vendeu em julho, mas só cobriu junho
-        FeristaCoverage.objects.create(external_name="FERISTA", covered_node=self.titular, ano=2025, mes=6)
+    def test_supervisor_aggregate_does_not_double_count_covered_month(self):
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2025, mes=6)
 
         history = SalesHistoryProvider.target_history(
-            self.titular.id, period_months=12, last_month=(2025, 12), group_id=self.group.id
+            self.supervisor.id, period_months=12, last_month=(2025, 12), group_id=self.group.id
         )
 
         by_month = {(p.ano, p.mes): p.quantity_kg for p in history}
-        self.assertEqual(by_month[(2025, 7)], 100.0)  # os 999 do ferista não entram
+        # Continua 100, não 200: titular e ferista estão os dois no escopo do Supervisor — o
+        # volume do titular já entra pela soma normal, somar de novo aqui duplicaria.
+        self.assertEqual(by_month[(2025, 6)], 100.0)
 
-    def test_same_ferista_redirects_to_different_titulares_in_different_months(self):
-        outro_titular = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Outro Titular")
+    def test_same_ferista_redirects_from_different_titulares_in_different_months(self):
+        outro_titular = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.VENDEDOR, nome="Outro Titular", parent=self.supervisor
+        )
         ExternalSalespersonMapping.objects.create(external_name="OUTRO TITULAR", hierarchy_node=outro_titular)
         for mes in range(1, 13):
             _baseline(2025, mes, "OUTRO TITULAR", "LINGUICA", 200)
 
-        _baseline(2025, 6, "FERISTA", "LINGUICA", 50)
-        _baseline(2025, 7, "FERISTA", "LINGUICA", 70)
-        FeristaCoverage.objects.create(external_name="FERISTA", covered_node=self.titular, ano=2025, mes=6)
-        FeristaCoverage.objects.create(external_name="FERISTA", covered_node=outro_titular, ano=2025, mes=7)
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2025, mes=6)
+        FeristaCoverage.objects.create(
+            covering_node=self.ferista, covered_node=outro_titular, ano=2025, mes=7
+        )
 
-        titular_history = {
+        history = {
             (p.ano, p.mes): p.quantity_kg
             for p in SalesHistoryProvider.target_history(
-                self.titular.id, period_months=12, last_month=(2025, 12), group_id=self.group.id
-            )
-        }
-        outro_history = {
-            (p.ano, p.mes): p.quantity_kg
-            for p in SalesHistoryProvider.target_history(
-                outro_titular.id, period_months=12, last_month=(2025, 12), group_id=self.group.id
+                self.ferista.id, period_months=12, last_month=(2025, 12), group_id=self.group.id
             )
         }
 
-        self.assertEqual(titular_history[(2025, 6)], 150.0)  # 100 + 50 do ferista em junho
-        self.assertEqual(titular_history[(2025, 7)], 100.0)  # julho é do outro titular, não conta aqui
-        self.assertEqual(outro_history[(2025, 7)], 270.0)  # 200 + 70 do ferista em julho
-        self.assertEqual(outro_history[(2025, 6)], 200.0)  # junho é do titular original, não conta aqui
+        self.assertEqual(history[(2025, 6)], 100.0)  # cobriu o titular original em junho
+        self.assertEqual(history[(2025, 7)], 200.0)  # cobriu o outro titular em julho
+
+    def test_same_ferista_covering_two_titulares_in_the_same_month_sums_both(self):
+        outro_titular = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.VENDEDOR, nome="Outro Titular", parent=self.supervisor
+        )
+        ExternalSalespersonMapping.objects.create(external_name="OUTRO TITULAR", hierarchy_node=outro_titular)
+        for mes in range(1, 13):
+            _baseline(2025, mes, "OUTRO TITULAR", "LINGUICA", 200)
+
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2025, mes=6)
+        FeristaCoverage.objects.create(
+            covering_node=self.ferista, covered_node=outro_titular, ano=2025, mes=6
+        )
+
+        history = {
+            (p.ano, p.mes): p.quantity_kg
+            for p in SalesHistoryProvider.target_history(
+                self.ferista.id, period_months=12, last_month=(2025, 12), group_id=self.group.id
+            )
+        }
+
+        self.assertEqual(history[(2025, 6)], 300.0)  # 100 do titular + 200 do outro, junho os dois

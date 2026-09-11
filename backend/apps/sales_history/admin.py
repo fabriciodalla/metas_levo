@@ -30,8 +30,8 @@ class AccumulatedSaleAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
 
 @admin.register(ClientPortfolioSnapshot)
 class ClientPortfolioSnapshotAdmin(ReadOnlyAdminMixin, admin.ModelAdmin):
-    list_display = ("client_name", "salesperson_name", "nk_supervisor", "estado", "municipio")
-    list_filter = ("estado", "nk_supervisor")
+    list_display = ("client_name", "salesperson_name", "estado", "municipio")
+    list_filter = ("estado",)
     search_fields = ("client_name", "salesperson_name", "cnpj")
 
 

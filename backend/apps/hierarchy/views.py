@@ -43,7 +43,7 @@ class HierarchyNodeViewSet(
 
 
 class FeristaCoverageViewSet(viewsets.ModelViewSet):
-    """Função do Administrador (2026-07-22, Decisão 13): quem cobriu quem, em qual mês. Com
+    """Função do Administrador (Decisão 13, revisão 2026-09-10): quem cobre quem, em qual mês. Com
     destroy — diferente de hierarquia/catálogo, nada mais referencia uma linha daqui, então
     corrigir um cadastro errado é só apagar e recriar."""
 
@@ -56,8 +56,8 @@ class FeristaCoverageViewSet(viewsets.ModelViewSet):
         return super().get_permissions()
 
     def get_queryset(self):
-        queryset = FeristaCoverage.objects.select_related("covered_node").order_by(
-            "-ano", "-mes", "external_name"
+        queryset = FeristaCoverage.objects.select_related("covering_node", "covered_node").order_by(
+            "-ano", "-mes", "covering_node__nome"
         )
         ano = self.request.query_params.get("ano")
         if ano:

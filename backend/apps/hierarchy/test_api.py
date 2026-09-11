@@ -138,6 +138,60 @@ class HierarchyNodeAdminApiTests(APITestCase):
         inconsistent.refresh_from_db()
         self.assertFalse(inconsistent.ativo)
 
+    def test_admin_can_create_representante_node(self):
+        """Representante: Vendedor sem usuário vinculado por design (sem acesso ao sistema), mas
+        que participa normalmente do acumulado/distribuição de meta."""
+        self.client.force_login(self.admin)
+        supervisor = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.SUPERVISOR, nome="Supervisor", parent=self.local
+        )
+
+        response = self.client.post(
+            reverse("hierarchy-node-list"),
+            {
+                "level": HierarchyNode.Level.VENDEDOR,
+                "nome": "Representante X",
+                "parent": supervisor.id,
+                "is_representante": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        node = HierarchyNode.objects.get(nome="Representante X")
+        self.assertTrue(node.is_representante)
+        self.assertEqual(node.users.count(), 0)
+
+    def test_rejects_representante_at_non_vendedor_level(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            reverse("hierarchy-node-list"),
+            {
+                "level": HierarchyNode.Level.SUPERVISOR,
+                "nome": "Supervisor Representante?",
+                "parent": self.local.id,
+                "is_representante": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_rejects_marking_occupied_node_as_representante(self):
+        self.client.force_login(self.admin)
+        supervisor = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.SUPERVISOR, nome="Supervisor", parent=self.local
+        )
+        vendedor = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.VENDEDOR, nome="Vendedor Ocupado", parent=supervisor
+        )
+        User.objects.create_user(username="ocupante", password="x", hierarchy_node=vendedor)
+
+        response = self.client.patch(
+            reverse("hierarchy-node-detail", args=[vendedor.id]), {"is_representante": True}, format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_deactivating_via_api_triggers_reassignment(self):
         group = ProductGroup.objects.create(nome="Embutidos")
         cycle = Cycle.objects.create(ano=2026, mes=7)
@@ -190,10 +244,12 @@ class HierarchyNodeAdminApiTests(APITestCase):
 
 
 class FeristaCoverageApiTests(APITestCase):
-    """Função do Administrador (Decisão 13): cadastrar quem cobriu quem, em qual mês."""
+    """Função do Administrador (Decisão 13, revisão 2026-09-10): cadastrar quem cobre quem, em
+    qual mês — ferista e titular são ambos Vendedores normais da hierarquia."""
 
     def setUp(self):
         self.vendedor = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Titular")
+        self.ferista = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Ferista")
         self.supervisor = HierarchyNode.objects.create(
             level=HierarchyNode.Level.SUPERVISOR, nome="Supervisor"
         )
@@ -207,7 +263,7 @@ class FeristaCoverageApiTests(APITestCase):
 
         response = self.client.post(
             reverse("ferista-coverage-list"),
-            {"external_name": "FERISTA", "covered_node": self.vendedor.id, "ano": 2026, "mes": 3},
+            {"covering_node": self.ferista.id, "covered_node": self.vendedor.id, "ano": 2026, "mes": 3},
         )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
@@ -224,29 +280,59 @@ class FeristaCoverageApiTests(APITestCase):
 
         response = self.client.post(
             reverse("ferista-coverage-list"),
-            {"external_name": "FERISTA", "covered_node": self.vendedor.id, "ano": 2026, "mes": 3},
+            {"covering_node": self.ferista.id, "covered_node": self.vendedor.id, "ano": 2026, "mes": 3},
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertTrue(FeristaCoverage.objects.filter(external_name="FERISTA").exists())
+        self.assertTrue(FeristaCoverage.objects.filter(covering_node=self.ferista).exists())
 
     def test_rejects_covered_node_that_is_not_vendedor(self):
         self.client.force_login(self.admin)
 
         response = self.client.post(
             reverse("ferista-coverage-list"),
-            {"external_name": "FERISTA", "covered_node": self.supervisor.id, "ano": 2026, "mes": 3},
+            {"covering_node": self.ferista.id, "covered_node": self.supervisor.id, "ano": 2026, "mes": 3},
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_rejects_duplicate_month_for_same_ferista(self):
+    def test_rejects_covering_node_that_is_not_vendedor(self):
         self.client.force_login(self.admin)
-        FeristaCoverage.objects.create(external_name="FERISTA", covered_node=self.vendedor, ano=2026, mes=3)
 
         response = self.client.post(
             reverse("ferista-coverage-list"),
-            {"external_name": "FERISTA", "covered_node": self.vendedor.id, "ano": 2026, "mes": 3},
+            {"covering_node": self.supervisor.id, "covered_node": self.vendedor.id, "ano": 2026, "mes": 3},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_allows_same_ferista_covering_a_second_titular_in_the_same_month(self):
+        self.client.force_login(self.admin)
+        other_titular = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Outro Titular")
+        FeristaCoverage.objects.create(
+            covering_node=self.ferista, covered_node=self.vendedor, ano=2026, mes=3
+        )
+
+        response = self.client.post(
+            reverse("ferista-coverage-list"),
+            {"covering_node": self.ferista.id, "covered_node": other_titular.id, "ano": 2026, "mes": 3},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            FeristaCoverage.objects.filter(covering_node=self.ferista, ano=2026, mes=3).count(), 2
+        )
+
+    def test_rejects_titular_covered_by_two_feristas_in_the_same_month(self):
+        self.client.force_login(self.admin)
+        other_ferista = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Outro Ferista")
+        FeristaCoverage.objects.create(
+            covering_node=self.ferista, covered_node=self.vendedor, ano=2026, mes=3
+        )
+
+        response = self.client.post(
+            reverse("ferista-coverage-list"),
+            {"covering_node": other_ferista.id, "covered_node": self.vendedor.id, "ano": 2026, "mes": 3},
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -254,7 +340,7 @@ class FeristaCoverageApiTests(APITestCase):
     def test_admin_can_delete_coverage(self):
         self.client.force_login(self.admin)
         coverage = FeristaCoverage.objects.create(
-            external_name="FERISTA", covered_node=self.vendedor, ano=2026, mes=3
+            covering_node=self.ferista, covered_node=self.vendedor, ano=2026, mes=3
         )
 
         response = self.client.delete(reverse("ferista-coverage-detail", args=[coverage.id]))

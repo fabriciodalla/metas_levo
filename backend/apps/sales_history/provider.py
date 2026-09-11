@@ -91,16 +91,25 @@ class SalesHistoryProvider:
         subgrupo é esparso demais pra pesar com confiança (ver docs/decisions.md, Decisão 6,
         refinamento 2026-07-21).
 
-        Cobertura de férias (Decisão 13): um ferista (nome livre, sem `ExternalSalespersonMapping`
-        próprio) que cobriu um desses vendedores num mês específico tem o volume vendido naquele
-        mês redirecionado pra cá — fora do(s) mês(es) cobertos, o nome do ferista não conta pra
-        ninguém, igual qualquer nome sem mapeamento.
+        Cobertura de férias (Decisão 13, revisão 2026-09-10): o ferista JÁ é um Vendedor normal,
+        com `ExternalSalespersonMapping` próprio — soma normal (acima) já conta o que ele vendeu
+        em nome próprio. O que falta é o histórico do TITULAR coberto: nos meses em que
+        `FeristaCoverage` registra esse vendedor como `covering_node` de alguém, o volume que esse
+        titular (`covered_node`) tem em `DistributionBaseline` naquele mês entra somado aqui — é a
+        base de sugestão do ferista, que está assumindo uma carteira que ele não construiu.
+
+        Guarda contra dobra de contagem: só soma o volume do titular quando ele **não** está
+        dentro do próprio `vendedor_ids` desta chamada — se estiver (ex.: `target_history` pedido
+        pro Supervisor comum aos dois), o volume do titular já entrou pela soma normal acima, via
+        o nome dele mesmo; somar de novo aqui duplicaria. Só quando a chamada é especificamente
+        pro nó do ferista (titular fora de escopo) é que essa soma extra faz sentido.
         """
         vendedor_ids = list(
             HierarchyNode.objects.filter(
                 id__in=ScopeResolver.descendant_ids(hierarchy_node_id), level=HierarchyNode.Level.VENDEDOR
             ).values_list("id", flat=True)
         )
+        vendedor_id_set = set(vendedor_ids)
         salesperson_names = list(
             ExternalSalespersonMapping.objects.filter(hierarchy_node_id__in=vendedor_ids).values_list(
                 "external_name", flat=True
@@ -117,17 +126,23 @@ class SalesHistoryProvider:
 
         month_set = set(months)
         coverage = [
-            (external_name, ano, mes)
-            for external_name, ano, mes in FeristaCoverage.objects.filter(
-                covered_node_id__in=vendedor_ids
-            ).values_list("external_name", "ano", "mes")
-            if (ano, mes) in month_set
+            (covered_node_id, ano, mes)
+            for covered_node_id, ano, mes in FeristaCoverage.objects.filter(
+                covering_node_id__in=vendedor_ids
+            ).values_list("covered_node_id", "ano", "mes")
+            if (ano, mes) in month_set and covered_node_id not in vendedor_id_set
         ]
         if not coverage:
             return history
 
+        titular_name_by_node_id = dict(
+            ExternalSalespersonMapping.objects.filter(
+                hierarchy_node_id__in={covered_node_id for covered_node_id, _, _ in coverage}
+            ).values_list("hierarchy_node_id", "external_name")
+        )
+
         coverage_queryset = DistributionBaseline.objects.filter(
-            salesperson_name__in={external_name for external_name, _, _ in coverage}
+            salesperson_name__in=set(titular_name_by_node_id.values())
         )
         if external_codes is not None:
             coverage_queryset = coverage_queryset.filter(subgroup_name__in=external_codes)
@@ -140,9 +155,12 @@ class SalesHistoryProvider:
             totals_by_name_month[key] = totals_by_name_month.get(key, 0.0) + float(total)
 
         by_month = {(point.ano, point.mes): point.quantity_kg for point in history}
-        for external_name, ano, mes in coverage:
+        for covered_node_id, ano, mes in coverage:
+            titular_name = titular_name_by_node_id.get(covered_node_id)
+            if titular_name is None:
+                continue
             by_month[(ano, mes)] = by_month.get((ano, mes), 0.0) + totals_by_name_month.get(
-                (external_name, ano, mes), 0.0
+                (titular_name, ano, mes), 0.0
             )
 
         return [MonthlyQuantity(ano=ano, mes=mes, quantity_kg=by_month[(ano, mes)]) for ano, mes in months]

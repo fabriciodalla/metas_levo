@@ -37,7 +37,7 @@ class SalesHistorySyncServiceTests(TestCase):
                 "nk_supervisor",
                 "nk_vendedor",
                 "nome_vendedor",
-                "clifor",
+                "cd_clifor",
                 "cnpj",
                 "nome_cliente",
                 "dt_emissao",
@@ -102,9 +102,7 @@ class SalesHistorySyncServiceTests(TestCase):
 
     @patch("apps.sales_history.services.connections")
     def test_sync_portfolio_replaces_existing_rows(self, mock_connections):
-        ClientPortfolioSnapshot.objects.create(
-            client_code=999, client_name="Antigo", salesperson_name="X", nk_supervisor="B.F.1"
-        )
+        ClientPortfolioSnapshot.objects.create(client_code=999, client_name="Antigo", salesperson_name="X")
         _mock_cursor(
             mock_connections,
             columns=[
@@ -112,7 +110,6 @@ class SalesHistorySyncServiceTests(TestCase):
                 "cnpj",
                 "nome_cliente",
                 "nome_vendedor",
-                "nk_supervisor",
                 "municipio",
                 "estado",
                 "cadastro",
@@ -124,7 +121,6 @@ class SalesHistorySyncServiceTests(TestCase):
                     "98765432100",
                     "Cliente Y",
                     "Beltrano",
-                    "B.F.229",
                     "Goiania",
                     "GOIAS",
                     date(2020, 1, 1),
@@ -241,10 +237,10 @@ class DistributionBaselineServiceTests(TestCase):
         )
 
         ClientPortfolioSnapshot.objects.create(
-            client_code=1, client_name="Cliente A", salesperson_name="Vendedor Novo", nk_supervisor="B.F.1"
+            client_code=1, client_name="Cliente A", salesperson_name="Vendedor Novo"
         )
         ClientPortfolioSnapshot.objects.create(
-            client_code=2, client_name="Cliente B", salesperson_name="Vendedor Novo", nk_supervisor="B.F.1"
+            client_code=2, client_name="Cliente B", salesperson_name="Vendedor Novo"
         )
 
     def test_rebuild_reassigns_history_to_current_portfolio_owner(self):
@@ -316,8 +312,8 @@ class DistributionBaselineServiceTests(TestCase):
 
 
 class DistributionBaselineServiceFeristaCoverageTests(TestCase):
-    """Extensão da Decisão 13 (2026-08-28): a reconstrução já entrega o volume do ferista
-    redirecionado pro titular no mês corrente da reconstrução, sem depender do redirecionamento
+    """Extensão da Decisão 13, revisão 2026-09-10: a reconstrução já entrega o volume do titular
+    redirecionado pro ferista no mês corrente da reconstrução, sem depender do redirecionamento
     avulso de `SalesHistoryProvider.target_history` — necessário pra telas que leem
     `DistributionBaseline` direto, como `VendorGroupSummaryService`."""
 
@@ -326,14 +322,19 @@ class DistributionBaselineServiceFeristaCoverageTests(TestCase):
         ExternalSalespersonMapping.objects.create(
             external_name="Titular Externo", hierarchy_node=self.titular
         )
+        self.ferista = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Ferista")
+        ExternalSalespersonMapping.objects.create(
+            external_name="Ferista Externo", hierarchy_node=self.ferista
+        )
 
+        # A carteira do ERP continua creditando o titular como dono da rota, mesmo de férias.
         ClientPortfolioSnapshot.objects.create(
-            client_code=1, client_name="Cliente A", salesperson_name="Ferista Externo", nk_supervisor="B.F.1"
+            client_code=1, client_name="Cliente A", salesperson_name="Titular Externo"
         )
         AccumulatedSale.objects.create(
-            nk_supervisor="B.F.1",
-            nk_vendedor="B.F.FERISTA",
-            salesperson_name="Ferista Externo",
+            nk_supervisor="L.F.1",
+            nk_vendedor="L.F.TITULAR",
+            salesperson_name="Titular Externo",
             client_code=1,
             sale_date=date(2026, 8, 10),
             subgroup_name="Linguica",
@@ -341,54 +342,82 @@ class DistributionBaselineServiceFeristaCoverageTests(TestCase):
             total_value=Decimal("400"),
         )
 
-    def test_rebuild_redirects_current_month_ferista_volume_to_titular(self):
-        FeristaCoverage.objects.create(
-            external_name="Ferista Externo", covered_node=self.titular, ano=2026, mes=8
-        )
+    def test_rebuild_redirects_current_month_titular_volume_to_ferista(self):
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2026, mes=8)
 
         DistributionBaselineService.rebuild(today=date(2026, 8, 28))
 
-        self.assertFalse(DistributionBaseline.objects.filter(salesperson_name="Ferista Externo").exists())
+        self.assertFalse(DistributionBaseline.objects.filter(salesperson_name="Titular Externo").exists())
         linguica = DistributionBaseline.objects.get(subgroup_name="Linguica")
-        self.assertEqual(linguica.salesperson_name, "Titular Externo")
+        self.assertEqual(linguica.salesperson_name, "Ferista Externo")
         self.assertEqual(linguica.total_quantity, Decimal("40"))
 
     def test_rebuild_ignores_ferista_coverage_registered_for_other_months(self):
         # Cobertura cadastrada pra julho e setembro — o mês atual da reconstrução (agosto) não
-        # tem cobertura própria, então o volume do ferista fica sem titular, igual qualquer nome
-        # sem `ExternalSalespersonMapping`.
-        FeristaCoverage.objects.create(
-            external_name="Ferista Externo", covered_node=self.titular, ano=2026, mes=7
-        )
-        FeristaCoverage.objects.create(
-            external_name="Ferista Externo", covered_node=self.titular, ano=2026, mes=9
-        )
+        # tem cobertura própria, então o volume continua com o titular, igual qualquer mês sem
+        # cobertura registrada.
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2026, mes=7)
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2026, mes=9)
 
         DistributionBaselineService.rebuild(today=date(2026, 8, 28))
 
-        self.assertTrue(DistributionBaseline.objects.filter(salesperson_name="Ferista Externo").exists())
-        self.assertFalse(DistributionBaseline.objects.filter(salesperson_name="Titular Externo").exists())
+        self.assertTrue(DistributionBaseline.objects.filter(salesperson_name="Titular Externo").exists())
+        self.assertFalse(DistributionBaseline.objects.filter(salesperson_name="Ferista Externo").exists())
 
-    def test_rebuild_does_not_redirect_ferista_volume_outside_current_month(self):
+    def test_rebuild_does_not_redirect_titular_volume_outside_current_month(self):
         AccumulatedSale.objects.all().delete()
         AccumulatedSale.objects.create(
-            nk_supervisor="B.F.1",
-            nk_vendedor="B.F.FERISTA",
-            salesperson_name="Ferista Externo",
+            nk_supervisor="L.F.1",
+            nk_vendedor="L.F.TITULAR",
+            salesperson_name="Titular Externo",
             client_code=1,
             sale_date=date(2026, 7, 10),
             subgroup_name="Linguica",
             total_quantity=Decimal("40"),
             total_value=Decimal("400"),
         )
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2026, mes=8)
+
+        DistributionBaselineService.rebuild(today=date(2026, 8, 28))
+
+        self.assertTrue(DistributionBaseline.objects.filter(salesperson_name="Titular Externo").exists())
+        self.assertFalse(DistributionBaseline.objects.filter(salesperson_name="Ferista Externo").exists())
+
+    def test_rebuild_redirects_two_titulares_to_the_same_ferista_in_the_same_month(self):
+        outro_titular = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Outro Titular")
+        ExternalSalespersonMapping.objects.create(
+            external_name="Outro Titular Externo", hierarchy_node=outro_titular
+        )
+        ClientPortfolioSnapshot.objects.create(
+            client_code=2, client_name="Cliente B", salesperson_name="Outro Titular Externo"
+        )
+        AccumulatedSale.objects.create(
+            nk_supervisor="L.F.1",
+            nk_vendedor="L.F.OUTRO",
+            salesperson_name="Outro Titular Externo",
+            client_code=2,
+            sale_date=date(2026, 8, 15),
+            subgroup_name="Linguica",
+            total_quantity=Decimal("25"),
+            total_value=Decimal("250"),
+        )
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2026, mes=8)
         FeristaCoverage.objects.create(
-            external_name="Ferista Externo", covered_node=self.titular, ano=2026, mes=8
+            covering_node=self.ferista, covered_node=outro_titular, ano=2026, mes=8
         )
 
         DistributionBaselineService.rebuild(today=date(2026, 8, 28))
 
-        self.assertTrue(DistributionBaseline.objects.filter(salesperson_name="Ferista Externo").exists())
         self.assertFalse(DistributionBaseline.objects.filter(salesperson_name="Titular Externo").exists())
+        self.assertFalse(
+            DistributionBaseline.objects.filter(salesperson_name="Outro Titular Externo").exists()
+        )
+        ferista_total = sum(
+            DistributionBaseline.objects.filter(salesperson_name="Ferista Externo").values_list(
+                "total_quantity", flat=True
+            )
+        )
+        self.assertEqual(ferista_total, Decimal("65"))  # 40 do titular + 25 do outro titular
 
 
 class VendorGroupSummaryServiceTests(TestCase):
@@ -470,6 +499,30 @@ class VendorGroupSummaryServiceTests(TestCase):
         result = VendorGroupSummaryService.summary(today=date(2026, 8, 15))
 
         self.assertNotIn("Inativo", [v["nome"] for v in result["vendedores"]])
+
+    def test_flags_covered_titular_as_em_ferias(self):
+        ferista = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.VENDEDOR, nome="Ferista", ativo=True, parent=self.supervisor
+        )
+        FeristaCoverage.objects.create(covering_node=ferista, covered_node=self.joao, ano=2026, mes=8)
+
+        result = VendorGroupSummaryService.summary(today=date(2026, 8, 15))
+
+        joao_row = next(v for v in result["vendedores"] if v["id"] == self.joao.id)
+        self.assertTrue(joao_row["em_ferias"])
+        maria_row = next(v for v in result["vendedores"] if v["id"] == self.maria.id)
+        self.assertFalse(maria_row["em_ferias"])
+
+    def test_does_not_flag_em_ferias_outside_the_covered_month(self):
+        ferista = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.VENDEDOR, nome="Ferista", ativo=True, parent=self.supervisor
+        )
+        FeristaCoverage.objects.create(covering_node=ferista, covered_node=self.joao, ano=2026, mes=7)
+
+        result = VendorGroupSummaryService.summary(today=date(2026, 8, 15))
+
+        joao_row = next(v for v in result["vendedores"] if v["id"] == self.joao.id)
+        self.assertFalse(joao_row["em_ferias"])
 
 
 class VendorSubgroupExportServiceTests(TestCase):
@@ -574,14 +627,14 @@ class SalesHistorySqlSyntaxTests(SimpleTestCase):
     def test_carteira_sql_has_no_missing_comma_between_literals(self):
         self.assertNotIn("''", CARTEIRA_SQL)
 
-    def test_acumulado_sql_includes_new_supervisors(self):
-        for code in ("B.F.290", "B.F.214"):
+    def test_acumulado_sql_excludes_specific_supervisors(self):
+        for code in ("L.F.34", "L.F.184"):
             self.assertIn(f"'{code}'", ACUMULADO_SQL)
 
-    def test_carteira_sql_ms_supervisor_list_has_no_duplicate_and_includes_new_supervisors(self):
-        match = re.search(r"nk_supervisor IN \(([^)]+)\)\s*AND endereco\.sg_estado = 'MS'", CARTEIRA_SQL)
-        self.assertIsNotNone(match, "não achou a lista de supervisores de MS em CARTEIRA_SQL")
-        codes = [code.strip().strip("'") for code in match.group(1).split(",")]
-        self.assertEqual(len(codes), len(set(codes)), f"lista de MS tem código duplicado: {codes}")
-        self.assertIn("B.F.290", codes)
-        self.assertIn("B.F.214", codes)
+    def test_acumulado_sql_scopes_to_levo_company_prefix(self):
+        self.assertIn("('L.F.' || sup.cd_emprvend)", ACUMULADO_SQL)
+
+    def test_carteira_sql_scopes_to_levo_company_prefix(self):
+        # %% (não %) porque CARTEIRA_SQL passa por substituição de parâmetro do driver mesmo sem
+        # nenhum %s de verdade — ver `_fetch_as_dicts`, mesma convenção do `%%SAO PAULO%%` antigo.
+        self.assertIn("nk_vendedor LIKE 'L.F%%'", CARTEIRA_SQL)

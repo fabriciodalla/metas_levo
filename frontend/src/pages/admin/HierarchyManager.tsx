@@ -204,7 +204,7 @@ export function HierarchyManager() {
 
       {modalUser && (
         <UserEditModal
-          user={modalUser}
+          target={{ kind: "user", user: modalUser }}
           nodes={nodes}
           onClose={() => setModalUser(null)}
           onSaved={handleSaved}
@@ -212,7 +212,22 @@ export function HierarchyManager() {
         />
       )}
 
-      {orphanNode && (
+      {orphanNode && orphanNode.is_representante && (
+        <Modal title="Representante" onClose={() => setOrphanNode(null)}>
+          <p>
+            <strong>{orphanNode.nome}</strong> ({orphanNode.level_display}) é um representante —
+            participa do acumulado e da distribuição de meta, mas não tem usuário nem login. Pra
+            editar nome, superior ou desativar, use a tela Gestão → Usuários.
+          </p>
+          <div className="field-group mt-4">
+            <Button type="button" variant="secondary" onClick={() => setOrphanNode(null)}>
+              Fechar
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      {orphanNode && !orphanNode.is_representante && (
         <Modal title="Nó sem usuário vinculado" onClose={() => setOrphanNode(null)}>
           <p>
             <strong>{orphanNode.nome}</strong> ({orphanNode.level_display}) não tem nenhum usuário

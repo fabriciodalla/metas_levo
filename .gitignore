@@ -6,6 +6,7 @@ backend/staticfiles/
 backend/.pytest_cache/
 node_modules/
 frontend/dist/
+frontend/.vite/
 *.tsbuildinfo
 .vscode/
 .idea/

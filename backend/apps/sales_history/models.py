@@ -51,7 +51,6 @@ class ClientPortfolioSnapshot(models.Model):
     cnpj = models.CharField(max_length=20, blank=True)
     client_name = models.CharField(max_length=150)
     salesperson_name = models.CharField(max_length=150)
-    nk_supervisor = models.CharField(max_length=50)
 
     municipio = models.CharField(max_length=60, blank=True)
     estado = models.CharField(max_length=60, blank=True)

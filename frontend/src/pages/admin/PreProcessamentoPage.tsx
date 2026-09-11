@@ -205,6 +205,7 @@ interface VendorSummaryFlatRow {
   vendedorId: number;
   vendedorNome: string;
   mapeado: boolean;
+  emFerias: boolean;
   localId: number | null;
   localNome: string | null;
   supervisorId: number | null;
@@ -250,6 +251,7 @@ function VendorGroupSummaryCard({ refreshToken }: { refreshToken: number }) {
       const base = {
         vendedorId: vendedor.id,
         vendedorNome: vendedor.nome,
+        emFerias: vendedor.em_ferias,
         localId: vendedor.local_id,
         localNome: vendedor.local_nome,
         supervisorId: vendedor.supervisor_id,
@@ -317,8 +319,6 @@ function VendorGroupSummaryCard({ refreshToken }: { refreshToken: number }) {
     });
   }, [allRows, localFilter, supervisorFilter, mediaFilter]);
 
-  const missingCount = summary?.vendedores.filter((v) => !v.mapeado).length ?? 0;
-
   return (
     <Card
       title="Resumo por vendedor e grupo"
@@ -342,15 +342,6 @@ function VendorGroupSummaryCard({ refreshToken }: { refreshToken: number }) {
       )}
       {!loading && !error && (
         <>
-          {missingCount > 0 && (
-            <div className="mb-3">
-              <Alert variant="warning">
-                {missingCount} vendedor(es) ativo(s) na hierarquia não aparecem na base
-                sincronizada — provavelmente falta cadastrar/curar o mapeamento de nome externo
-                (Django Admin) ou a pessoa não tem venda/carteira no ERP ainda.
-              </Alert>
-            </div>
-          )}
           <div className="field-group mb-3">
             <div className="field">
               <label className="field-label" htmlFor="vendor-summary-local">
@@ -439,10 +430,14 @@ function VendorGroupSummaryCard({ refreshToken }: { refreshToken: number }) {
                   <tr key={`${row.vendedorId}-${row.grupoNome ?? index}`}>
                     <td>
                       {row.vendedorNome}
-                      {!row.mapeado && (
-                        <Badge variant="warning">
-                          <TriangleAlert size={12} /> sem sincronização
-                        </Badge>
+                      {row.emFerias ? (
+                        <Badge variant="accent">em férias</Badge>
+                      ) : (
+                        !row.mapeado && (
+                          <Badge variant="warning">
+                            <TriangleAlert size={12} /> sem sincronização
+                          </Badge>
+                        )
                       )}
                     </td>
                     <td>{row.localNome ?? "—"}</td>

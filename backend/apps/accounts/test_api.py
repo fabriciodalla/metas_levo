@@ -290,6 +290,41 @@ class UserAccountApiTests(APITestCase):
         node = created.hierarchy_nodes.get()
         self.assertEqual(node.id, imported.id)
 
+    def test_admin_creating_user_does_not_reuse_representante_node_with_matching_name(self):
+        """Representante (Vendedor sem usuário por design, `HierarchyNode.is_representante`)
+        nunca pode virar a posição de um usuário de verdade só por coincidência de
+        nome/cargo/superior — o mesmo casamento que reaproveita um nó "de planilha" precisa
+        ignorar esses nós."""
+        self.client.force_login(self.admin)
+        local = HierarchyNode.objects.create(level=HierarchyNode.Level.LOCAL, nome="Local", parent=self.node)
+        supervisor = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.SUPERVISOR, nome="Supervisor", parent=local
+        )
+        representante = HierarchyNode.objects.create(
+            level=HierarchyNode.Level.VENDEDOR,
+            nome="Zé Representante",
+            parent=supervisor,
+            is_representante=True,
+        )
+
+        response = self.client.post(
+            reverse("user-account-list"),
+            {
+                "username": "Zé Representante",
+                "email": "ze@levo.local",
+                "password": "senha-forte-123",
+                "level": HierarchyNode.Level.VENDEDOR,
+                "parent_node_id": supervisor.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        created = User.objects.get(username="Zé Representante")
+        node = created.hierarchy_nodes.get()
+        self.assertNotEqual(node.id, representante.id)
+        representante.refresh_from_db()
+        self.assertEqual(representante.users.count(), 0)
+
     def test_admin_renaming_user_updates_linked_node_nome(self):
         """A transição de trocar quem ocupa uma posição (ex.: substituir o titular de um cargo)
         é só editar nome completo/login da pessoa — sem mexer em cargo/superior."""

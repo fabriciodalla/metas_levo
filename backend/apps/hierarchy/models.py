@@ -48,6 +48,12 @@ class HierarchyNode(models.Model):
     )
     nome = models.CharField(max_length=255)
     ativo = models.BooleanField(default=True)
+    # Vendedor sem usuário vinculado por design (representante comercial, sem acesso ao sistema)
+    # — não confundir com um nó órfão acidental (quem tinha usuário e perdeu). Só entra no
+    # acumulado/distribuição de meta como qualquer outro Vendedor; `resolve_or_create_node`
+    # (apps/accounts/services.py) exclui esses nós do reaproveitamento por nome, pra nenhum
+    # usuário acabar vinculado a ele por coincidência de nome/cargo/superior.
+    is_representante = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -62,6 +68,9 @@ class HierarchyNode(models.Model):
         # (`HierarchyNodeSerializer.validate`), o ModelForm padrão do Admin não teria nenhuma
         # checagem de nível/pai sem isso — abriria brecha pra um nó virar seu próprio pai (ou
         # o pai de um nível incompatível) só por um clique errado no autocomplete.
+        if self.is_representante and self.level != self.Level.VENDEDOR:
+            raise ValidationError({"is_representante": "Só um nó Vendedor pode ser Representante."})
+
         level_order = [choice[0] for choice in self.Level.choices]
         level_index = level_order.index(self.level)
         if level_index == 0:
@@ -123,20 +132,35 @@ class ExternalSalespersonMapping(models.Model):
 
 
 class FeristaCoverage(models.Model):
-    """Cobertura de férias: um vendedor "ferista" (identificado só pelo nome livre do ERP, igual
-    `ExternalSalespersonMapping.external_name` — não tem nó próprio na hierarquia, nem precisa)
-    vende em nome de um Vendedor titular já cadastrado enquanto ele está de férias. Decisão do
-    usuário, 2026-07-22 (ver Decisão 13 em docs/decisions.md): a granularidade é **mês/ano**, não
-    data exata — `DistributionBaseline` (fonte do histórico) só existe por mês, então precisão de
-    dia seria falsa (não dá pra fatiar um mês de venda entre dois titulares).
+    """Cobertura de férias — modelo próprio da Levo, diferente do herdado da Bello (Decisão 13
+    original, 2026-07-22): lá o ferista não tinha nó próprio e seu volume virava histórico do
+    titular, que seguia recebendo meta. Aqui é o oposto (revisão confirmada pelo usuário,
+    2026-09-10): o ferista JÁ É um Vendedor normal da hierarquia (nó próprio, com
+    `ExternalSalespersonMapping` próprio, como qualquer contratação) — `FeristaCoverage` só liga
+    esse `covering_node` (o ferista) ao `covered_node` (o titular de férias) por `ano`/`mes`.
+    Granularidade mensal, não data exata — mesmo motivo de sempre: `DistributionBaseline` só
+    existe por mês, precisão de dia seria falsa.
 
-    `SalesHistoryProvider.target_history` usa isso pra redirecionar, mês a mês, o volume vendido
-    pelo ferista pro nó do titular coberto — nos meses sem cobertura registrada, o nome do ferista
-    simplesmente não conta pra ninguém (mesmo comportamento de um nome sem
-    `ExternalSalespersonMapping`).
+    Efeitos, enquanto a cobertura está registrada pro ciclo em distribuição:
+    - `covered_node` (titular) sai da lista de alvos de distribuição Supervisor→Vendedor
+      (`_build_child_distribution_contexts`, `apps/allocations/services.py`) — só o ferista
+      recebe meta naquela rota, evitando duplicidade.
+    - `SalesHistoryProvider.target_history` soma, mês a mês, o histórico do titular coberto ao
+      histórico do `covering_node` — é a base de sugestão de meta do ferista, já que ele está
+      assumindo a carteira estabelecida do titular.
+
+    Um ferista pode cobrir MAIS DE UM titular no mesmo mês (2026-09-10, pedido explícito do
+    usuário — ex.: um ferista assume duas rotas simultâneas) — várias linhas com o mesmo
+    `covering_node`/`ano`/`mes`, cada uma com um `covered_node` diferente, são válidas; os dois
+    efeitos acima (exclusão da distribuição, soma de histórico) se aplicam a cada titular coberto
+    independentemente, e o histórico de todos eles se soma no `covering_node`. Só o inverso
+    continua proibido: um titular não pode ter dois feristas cobrindo o mesmo mês (não dá pra
+    fatiar a rota entre dois).
     """
 
-    external_name = models.CharField(max_length=150)
+    covering_node = models.ForeignKey(
+        HierarchyNode, on_delete=models.PROTECT, related_name="covering_ferista_coverages"
+    )
     covered_node = models.ForeignKey(
         HierarchyNode, on_delete=models.PROTECT, related_name="ferista_coverages"
     )
@@ -145,18 +169,21 @@ class FeristaCoverage(models.Model):
 
     class Meta:
         constraints = [
-            # Um ferista só cobre uma pessoa por mês — a granularidade mensal não permite fatiar.
-            models.UniqueConstraint(
-                fields=["external_name", "ano", "mes"], name="uniq_ferista_coverage_month"
-            ),
+            # Um titular só é coberto por um ferista por mês (não dá pra fatiar a rota) — o
+            # inverso é permitido: o mesmo ferista pode cobrir vários titulares no mesmo mês.
+            models.UniqueConstraint(fields=["covered_node", "ano", "mes"], name="uniq_ferista_covered_month"),
             models.CheckConstraint(
                 condition=models.Q(mes__gte=1, mes__lte=12), name="ferista_coverage_mes_valido"
             ),
         ]
 
     def clean(self):
+        if self.covering_node_id and self.covering_node.level != HierarchyNode.Level.VENDEDOR:
+            raise ValidationError({"covering_node": "O ferista precisa ser um Vendedor."})
         if self.covered_node_id and self.covered_node.level != HierarchyNode.Level.VENDEDOR:
             raise ValidationError({"covered_node": "O nó coberto precisa ser um Vendedor."})
+        if self.covering_node_id and self.covering_node_id == self.covered_node_id:
+            raise ValidationError({"covering_node": "O ferista não pode cobrir a si mesmo."})
 
     def __str__(self):
-        return f"{self.external_name} cobriu {self.covered_node} em {self.mes:02d}/{self.ano}"
+        return f"{self.covering_node} cobriu {self.covered_node} em {self.mes:02d}/{self.ano}"

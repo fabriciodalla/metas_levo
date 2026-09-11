@@ -19,6 +19,7 @@ export interface HierarchyNode {
   parent: number | null;
   nome: string;
   ativo: boolean;
+  is_representante: boolean;
 }
 
 export interface Cycle {
@@ -136,6 +137,7 @@ export interface VendorGroupSummaryRow {
   id: number;
   nome: string;
   mapeado: boolean;
+  em_ferias: boolean;
   supervisor_id: number | null;
   supervisor_nome: string | null;
   local_id: number | null;
@@ -200,7 +202,8 @@ export interface SubgroupDistributionContext {
 
 export interface FeristaCoverage {
   id: number;
-  external_name: string;
+  covering_node: number;
+  covering_node_nome: string;
   covered_node: number;
   covered_node_nome: string;
   ano: number;
@@ -208,7 +211,7 @@ export interface FeristaCoverage {
 }
 
 export interface FeristaCoverageInput {
-  external_name: string;
+  covering_node: number;
   covered_node: number;
   ano: number;
   mes: number;
@@ -232,4 +235,14 @@ export interface UserAccountInput {
   is_active?: boolean;
   level?: string | null;
   parent_node_id?: number | null;
+}
+
+// Representante: Vendedor sem usuário vinculado por design (sem acesso ao sistema) — mesmo papel
+// na cascata de um Vendedor comum, só sem login. Ver CLAUDE.md / HierarchyNode.is_representante.
+export interface RepresentanteInput {
+  nome: string;
+  parent: number | null;
+  ativo?: boolean;
+  is_representante?: true;
+  level?: "VENDEDOR";
 }

@@ -8,7 +8,7 @@ from django.db.models import Count, Prefetch, Q
 from apps.audit.models import AuditLogEntry
 from apps.catalog.models import ProductGroup, ProductSubgroup
 from apps.cycles.models import Cycle
-from apps.hierarchy.models import HierarchyNode
+from apps.hierarchy.models import FeristaCoverage, HierarchyNode
 from apps.sales_history.provider import SalesHistoryProvider
 
 from .models import GoalAllocation
@@ -656,6 +656,16 @@ def _build_child_distribution_contexts(
     `SeasonalTrendDistributionStrategy`, se alguém a registrar de volta)."""
     children_nodes = list(HierarchyNode.objects.filter(parent_id=owner_node.id, ativo=True))
     if not children_nodes or group_id is None:
+        return []
+
+    # Cobertura de férias (Decisão 13, revisão 2026-09-10): titular de férias sai da lista de
+    # alvos deste ciclo — só o ferista (já um filho normal de `owner_node`) recebe meta na rota,
+    # sem duplicidade. Fora do ciclo/mês coberto, o titular volta a aparecer normalmente.
+    covered_this_cycle = set(
+        FeristaCoverage.objects.filter(ano=cycle.ano, mes=cycle.mes).values_list("covered_node_id", flat=True)
+    )
+    children_nodes = [node for node in children_nodes if node.id not in covered_this_cycle]
+    if not children_nodes:
         return []
 
     last_month = previous_month(cycle.ano, cycle.mes)

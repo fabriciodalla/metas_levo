@@ -10,9 +10,20 @@ class HierarchyNodeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = HierarchyNode
-        fields = ["id", "level", "level_display", "parent", "nome", "ativo"]
+        fields = ["id", "level", "level_display", "parent", "nome", "ativo", "is_representante"]
 
     def validate(self, attrs):
+        is_representante = attrs.get("is_representante", getattr(self.instance, "is_representante", False))
+        level_for_representante = attrs.get("level", getattr(self.instance, "level", None))
+        if is_representante and level_for_representante != HierarchyNode.Level.VENDEDOR:
+            raise serializers.ValidationError(
+                {"is_representante": "Só um nó Vendedor pode ser Representante."}
+            )
+        if is_representante and self.instance is not None and self.instance.users.exists():
+            raise serializers.ValidationError(
+                {"is_representante": "Esse nó já tem usuário vinculado — não pode virar Representante."}
+            )
+
         # Só reexamina a relação nível/pai quando um dos dois está de fato mudando — um PATCH que
         # só mexe em `ativo` (ex.: desativar um nó órfão) não pode ser bloqueado por uma
         # inconsistência herdada de antes, que não tem a ver com o que está sendo salvo agora.
@@ -55,11 +66,25 @@ class HierarchyNodeSerializer(serializers.ModelSerializer):
 
 
 class FeristaCoverageSerializer(serializers.ModelSerializer):
+    covering_node_nome = serializers.CharField(source="covering_node.nome", read_only=True)
     covered_node_nome = serializers.CharField(source="covered_node.nome", read_only=True)
 
     class Meta:
         model = FeristaCoverage
-        fields = ["id", "external_name", "covered_node", "covered_node_nome", "ano", "mes"]
+        fields = [
+            "id",
+            "covering_node",
+            "covering_node_nome",
+            "covered_node",
+            "covered_node_nome",
+            "ano",
+            "mes",
+        ]
+
+    def validate_covering_node(self, value):
+        if value.level != HierarchyNode.Level.VENDEDOR:
+            raise serializers.ValidationError("O ferista precisa ser um Vendedor.")
+        return value
 
     def validate_covered_node(self, value):
         if value.level != HierarchyNode.Level.VENDEDOR:
@@ -72,15 +97,21 @@ class FeristaCoverageSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        external_name = attrs.get("external_name", getattr(self.instance, "external_name", None))
+        covering_node = attrs.get("covering_node", getattr(self.instance, "covering_node", None))
+        covered_node = attrs.get("covered_node", getattr(self.instance, "covered_node", None))
         ano = attrs.get("ano", getattr(self.instance, "ano", None))
         mes = attrs.get("mes", getattr(self.instance, "mes", None))
 
-        conflict = FeristaCoverage.objects.filter(external_name=external_name, ano=ano, mes=mes)
+        if covering_node is not None and covering_node == covered_node:
+            raise serializers.ValidationError({"covering_node": "O ferista não pode cobrir a si mesmo."})
+
+        # Só o titular tem restrição de unicidade por mês (não dá pra fatiar a rota entre dois
+        # feristas) — o mesmo ferista pode cobrir vários titulares no mesmo mês sem problema.
+        covered_conflict = FeristaCoverage.objects.filter(covered_node=covered_node, ano=ano, mes=mes)
         if self.instance is not None:
-            conflict = conflict.exclude(pk=self.instance.pk)
-        if conflict.exists():
+            covered_conflict = covered_conflict.exclude(pk=self.instance.pk)
+        if covered_conflict.exists():
             raise serializers.ValidationError(
-                {"mes": f"{external_name} já tem cobertura cadastrada em {mes:02d}/{ano}."}
+                {"mes": f"{covered_node.nome} já tem cobertura cadastrada em {mes:02d}/{ano}."}
             )
         return attrs

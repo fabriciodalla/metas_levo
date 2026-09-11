@@ -41,7 +41,11 @@ def resolve_or_create_node(user: User, level: str, parent_node: HierarchyNode | 
     usuário, Decisão 10/O5 revisada, ver docs/decisions.md).
     """
     reusable = HierarchyNode.objects.filter(
-        level=level, parent=parent_node, nome__iexact=user.username, users__isnull=True
+        level=level,
+        parent=parent_node,
+        nome__iexact=user.username,
+        users__isnull=True,
+        is_representante=False,
     ).first()
     if reusable is not None:
         if not reusable.ativo:

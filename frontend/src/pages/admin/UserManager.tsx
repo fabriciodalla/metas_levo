@@ -5,13 +5,20 @@ import type { HierarchyNode, UserAccount } from "../../api/types";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { Badge } from "../../components/ui/Badge";
-import { UserEditModal, displayName } from "./UserEditModal";
+import { UserEditModal, displayName, type UserEditModalTarget } from "./UserEditModal";
 
 export function UserManager() {
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [nodes, setNodes] = useState<HierarchyNode[]>([]);
-  const [modalUser, setModalUser] = useState<UserAccount | null | undefined>(undefined);
+  const [modalTarget, setModalTarget] = useState<UserEditModalTarget | null>(null);
   const [search, setSearch] = useState("");
+
+  // Representante: Vendedor sem usuário vinculado por design (sem acesso ao sistema) — gerido
+  // na mesma tela que os usuários de verdade, ver UserEditModal.
+  const representantes = useMemo(
+    () => nodes.filter((n) => n.is_representante && n.level === "VENDEDOR"),
+    [nodes]
+  );
 
   const filteredUsers = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -24,6 +31,12 @@ export function UserManager() {
     );
   }, [users, search]);
 
+  const filteredRepresentantes = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return representantes;
+    return representantes.filter((n) => n.nome.toLowerCase().includes(term));
+  }, [representantes, search]);
+
   function reload() {
     void api.get<UserAccount[]>("/accounts/users/").then(setUsers);
     void api.get<HierarchyNode[]>("/hierarchy/nodes/").then(setNodes);
@@ -32,7 +45,7 @@ export function UserManager() {
   useEffect(reload, []);
 
   function closeModal() {
-    setModalUser(undefined);
+    setModalTarget(null);
   }
 
   function handleSaved() {
@@ -45,7 +58,7 @@ export function UserManager() {
       <Card
         title="Usuários"
         actions={
-          <Button type="button" size="sm" onClick={() => setModalUser(null)}>
+          <Button type="button" size="sm" onClick={() => setModalTarget({ kind: "user", user: null })}>
             <Plus size={14} /> Novo usuário
           </Button>
         }
@@ -73,7 +86,7 @@ export function UserManager() {
               </tr>
             </thead>
             <tbody>
-              {filteredUsers.length === 0 && (
+              {filteredUsers.length === 0 && filteredRepresentantes.length === 0 && (
                 <tr>
                   <td colSpan={5} className="table-empty-cell">
                     Nenhum usuário encontrado.
@@ -81,7 +94,7 @@ export function UserManager() {
                 </tr>
               )}
               {filteredUsers.map((user) => (
-                <tr key={user.id}>
+                <tr key={`user-${user.id}`}>
                   <td>{displayName(user)}</td>
                   <td>{user.email}</td>
                   <td>
@@ -95,7 +108,32 @@ export function UserManager() {
                     </Badge>
                   </td>
                   <td>
-                    <Button variant="ghost" size="sm" onClick={() => setModalUser(user)}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setModalTarget({ kind: "user", user })}
+                    >
+                      <Pencil size={14} /> Editar
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+              {filteredRepresentantes.map((node) => (
+                <tr key={`representante-${node.id}`}>
+                  <td>{node.nome}</td>
+                  <td className="text-muted">— (representante, sem login)</td>
+                  <td>—</td>
+                  <td>
+                    <Badge variant={node.ativo ? "success" : "neutral"}>
+                      {node.ativo ? "ativo" : "inativo"}
+                    </Badge>
+                  </td>
+                  <td>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setModalTarget({ kind: "representante", node })}
+                    >
                       <Pencil size={14} /> Editar
                     </Button>
                   </td>
@@ -106,9 +144,9 @@ export function UserManager() {
         </div>
       </Card>
 
-      {modalUser !== undefined && (
+      {modalTarget !== null && (
         <UserEditModal
-          user={modalUser}
+          target={modalTarget}
           nodes={nodes}
           onClose={closeModal}
           onSaved={handleSaved}

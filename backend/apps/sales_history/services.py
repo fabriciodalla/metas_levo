@@ -78,7 +78,7 @@ class SalesHistorySyncService:
                     nk_supervisor=row["nk_supervisor"],
                     nk_vendedor=row["nk_vendedor"],
                     salesperson_name=row["nome_vendedor"],
-                    client_code=row["clifor"],
+                    client_code=row["cd_clifor"],
                     cnpj=row["cnpj"] or "",
                     client_name=row["nome_cliente"] or "",
                     sale_date=row["dt_emissao"],
@@ -103,7 +103,6 @@ class SalesHistorySyncService:
                     cnpj=row["cnpj"] or "",
                     client_name=row["nome_cliente"],
                     salesperson_name=row["nome_vendedor"],
-                    nk_supervisor=row["nk_supervisor"],
                     municipio=row["municipio"] or "",
                     estado=row["estado"] or "",
                     registered_at=row["cadastro"],
@@ -126,14 +125,15 @@ class DistributionBaselineService:
     ainda é real e deve contar na sugestão de meta do Gerente (P1, que soma por subgrupo sem
     filtrar por vendedor — ver `SalesHistoryProvider.group_history`).
 
-    Cobertura de férias (Decisão 13) no mês corrente: se um `FeristaCoverage` cobre o mês/ano de
-    hoje, as linhas desse mês vendidas em nome do ferista já saem daqui atribuídas ao titular
-    (`covered_node`), em vez de precisar do redirecionamento avulso de
-    `SalesHistoryProvider.target_history`. Meses passados/futuros cadastrados em
-    `FeristaCoverage` são ignorados aqui de propósito — só o mês atual da reconstrução conta —,
-    continuam sendo tratados por `target_history` mês a mês. Sem isso, telas que leem
-    `DistributionBaseline` direto (ex.: `VendorGroupSummaryService`) nunca veriam esse volume, já
-    que o ferista não tem `ExternalSalespersonMapping` próprio.
+    Cobertura de férias (Decisão 13, revisão 2026-09-10) no mês corrente: se um `FeristaCoverage`
+    cobre o mês/ano de hoje, as linhas desse mês registradas em nome do titular (`covered_node`,
+    quem a carteira do ERP ainda credita como dono da rota, mesmo de férias) já saem daqui
+    atribuídas ao ferista (`covering_node`, quem de fato está vendendo e recebendo meta), em vez
+    de precisar do redirecionamento avulso de `SalesHistoryProvider.target_history`. Meses
+    passados/futuros cadastrados em `FeristaCoverage` são ignorados aqui de propósito — só o mês
+    atual da reconstrução conta —, continuam sendo tratados por `target_history` mês a mês. Sem
+    isso, telas que leem `DistributionBaseline` direto (ex.: `VendorGroupSummaryService`) só
+    veriam esse volume sob o nome do titular, mesmo ele estando de férias.
     """
 
     @staticmethod
@@ -145,16 +145,17 @@ class DistributionBaselineService:
             ClientPortfolioSnapshot.objects.values_list("client_code", "salesperson_name")
         )
 
-        titular_external_name_by_node_id = dict(
+        external_name_by_node_id = dict(
             ExternalSalespersonMapping.objects.values_list("hierarchy_node_id", "external_name")
         )
-        ferista_redirect: dict[str, str] = {}
-        for external_name, covered_node_id in FeristaCoverage.objects.filter(
+        vacation_redirect: dict[str, str] = {}
+        for covering_node_id, covered_node_id in FeristaCoverage.objects.filter(
             ano=today.year, mes=today.month
-        ).values_list("external_name", "covered_node_id"):
-            titular_external_name = titular_external_name_by_node_id.get(covered_node_id)
-            if titular_external_name:
-                ferista_redirect[external_name] = titular_external_name
+        ).values_list("covering_node_id", "covered_node_id"):
+            titular_name = external_name_by_node_id.get(covered_node_id)
+            ferista_name = external_name_by_node_id.get(covering_node_id)
+            if titular_name and ferista_name:
+                vacation_redirect[titular_name] = ferista_name
 
         totals: dict[tuple[int, int, str | None, str], Decimal] = defaultdict(Decimal)
         rows = AccumulatedSale.objects.values_list(
@@ -165,9 +166,9 @@ class DistributionBaselineService:
             if (
                 sale_date.year == today.year
                 and sale_date.month == today.month
-                and salesperson_name in ferista_redirect
+                and salesperson_name in vacation_redirect
             ):
-                salesperson_name = ferista_redirect[salesperson_name]
+                salesperson_name = vacation_redirect[salesperson_name]
             key = (sale_date.year, sale_date.month, salesperson_name, subgroup_name)
             totals[key] += quantity
 
@@ -194,7 +195,11 @@ class VendorGroupSummaryService:
     média (3 e 12 meses) por Grupo de produto, segundo `DistributionBaseline` — e quais
     Vendedores ativos não têm nenhum nome batendo no histórico sincronizado (`mapeado=False`),
     sinal de que falta gente pra curar em `ExternalSalespersonMapping` antes da sugestão
-    automática (P1-P4) enxergar o time todo."""
+    automática (P1-P4) enxergar o time todo.
+
+    `em_ferias` (2026-09-10): titular coberto por um ferista (`FeristaCoverage.covered_node`) no
+    mês de `today` — a média dele pode estar baixa/zerada nesse mês porque o volume foi
+    redirecionado pro ferista (Decisão 13, revisão 2026-09-10), não porque falta curadoria."""
 
     @staticmethod
     def summary(today: datetime.date | None = None) -> dict:
@@ -214,6 +219,12 @@ class VendorGroupSummaryService:
             ).values_list("external_name", "hierarchy_node_id")
         )
         mapped_node_ids = set(name_to_node_id.values())
+
+        em_ferias_ids = set(
+            FeristaCoverage.objects.filter(ano=today.year, mes=today.month).values_list(
+                "covered_node_id", flat=True
+            )
+        )
 
         code_to_group: dict[str, tuple[int, str]] = {}
         for mapping in ExternalProductMapping.objects.select_related("group", "subgroup__group"):
@@ -257,6 +268,7 @@ class VendorGroupSummaryService:
                     "id": vendedor.id,
                     "nome": vendedor.nome,
                     "mapeado": vendedor.id in mapped_node_ids,
+                    "em_ferias": vendedor.id in em_ferias_ids,
                     "supervisor_id": supervisor.id if supervisor else None,
                     "supervisor_nome": supervisor.nome if supervisor else None,
                     "local_id": local.id if local else None,

@@ -717,6 +717,53 @@ reconstrução é redirecionado aqui, o resto segue dependendo do redirecionamen
 `target_history` não encontra mais linhas do ferista pra esse mês específico e não soma nada em
 dobro.
 
+**Revisão 2026-09-10 — inversão completa do mecanismo: o ferista passa a ter meta própria, e é o
+histórico do TITULAR que é redirecionado pro ferista (não mais o oposto).** A versão original
+(2026-07-22) era herdada do modelo da Bello: o ferista não tinha nó próprio, vendia com nome livre
+no ERP, e seu volume virava histórico do titular — que seguia sendo o único a receber meta. O
+usuário identificou que a Levo trabalha diferente: quem cobre férias **recebe meta própria**
+naquele período, e é o histórico já estabelecido do titular (a carteira/rota que ele construiu)
+que deve virar a base de sugestão de meta do ferista — não o contrário.
+- **Escolha:** `FeristaCoverage` (`apps/hierarchy/models.py`) troca `external_name` (texto livre)
+  por `covering_node` — o ferista passa a ser um `HierarchyNode` VENDEDOR **normal**, cadastrado
+  como qualquer contratação (nó próprio, `ExternalSalespersonMapping` próprio pro nome dele no
+  ERP, vínculo de Supervisor) pela tela de Gestão já existente, sem necessidade de UI nova.
+  `covered_node` (o titular) continua igual. Duas `UniqueConstraint` agora (`covering_node`+
+  `ano`+`mes` e `covered_node`+`ano`+`mes`): um ferista só cobre uma pessoa por mês, e um titular
+  só é coberto por um ferista por mês (a versão original só tinha a primeira, já que
+  `external_name` era livre e não dava pra garantir a segunda).
+- **Efeitos, com a cobertura registrada pro mês/ciclo em questão:**
+  - `_build_child_distribution_contexts` (`apps/allocations/services.py`) exclui o `covered_node`
+    da lista de alvos de distribuição Supervisor→Vendedor daquele ciclo — só o ferista (um filho
+    normal do mesmo Supervisor) aparece, evitando meta duplicada na mesma rota. Fora do ciclo
+    coberto, o titular volta a aparecer normalmente — nenhuma ação extra além de não ter mais
+    `FeristaCoverage` pra aquele mês.
+  - `SalesHistoryProvider.target_history` soma, mês a mês, o histórico do `covered_node` ao
+    histórico do `covering_node` — com uma guarda contra dobra de contagem: só soma quando o
+    titular **não** está no mesmo escopo da chamada (ex.: pedir o histórico do Supervisor comum
+    aos dois não duplica, porque o volume do titular já entra pela soma normal dele mesmo).
+  - `DistributionBaselineService.rebuild()` continua com o mesmo atalho pro mês corrente da
+    reconstrução (limitação aceita na revisão 2026-08-28, agora invertida): linhas do mês atual
+    registradas em nome do titular (a carteira do ERP continua creditando a ele, mesmo de férias)
+    saem já reatribuídas ao ferista, sem depender do redirecionamento avulso de `target_history` —
+    necessário pras telas que leem `DistributionBaseline` direto (`VendorGroupSummaryService`).
+- **Trade-off aceito:** como o ferista agora é um Vendedor normal com `ExternalSalespersonMapping`
+  próprio, o volume que ele vender em nome dele mesmo (fora do redirecionamento) já conta
+  normalmente pro próprio histórico — não precisa de tratamento especial nenhum, só soma junto.
+- **Reversibilidade:** média — como a Bello, ao contrário da Levo, usa o mecanismo original
+  (ferista sem nó próprio), qualquer trecho de código portado de lá pra cá que dependa de
+  `FeristaCoverage.external_name` precisa ser adaptado — não é mais um campo do model.
+
+**Refinamento (mesmo dia, 2026-09-10) — um ferista pode cobrir mais de um titular no mesmo mês.**
+Pedido explícito do usuário: um ferista pode assumir duas (ou mais) rotas simultâneas. Removida a
+`UniqueConstraint(covering_node, ano, mes)` — só `UniqueConstraint(covered_node, ano, mes)`
+continua (um titular não pode ter dois feristas cobrindo o mesmo mês, isso não mudou). Nenhuma
+outra mudança de código foi necessária: `target_history` já soma cada `FeristaCoverage` da lista
+independentemente (várias linhas do mesmo `covering_node`/mês só significam mais termos somados
+ao total do ferista), e o redirecionamento de `rebuild()` já constrói um dicionário por
+titular→ferista (várias chaves de titular podem apontar pro mesmo ferista sem colisão). Só o
+serializer (`FeristaCoverageSerializer.validate`) e a constraint do banco precisaram mudar.
+
 ---
 
 ## Decisão 14 — Remoção do nível Coordenador Regional: hierarquia passa de 5 para 4 níveis

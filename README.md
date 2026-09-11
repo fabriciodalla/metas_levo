@@ -44,7 +44,7 @@ docker compose up -d
 ```
 
 A API sobe em `http://localhost:8001/`. O Django Admin fica em `http://localhost:8001/admin/`. O
-frontend (SPA React) sobe em `http://localhost:5174/`.
+frontend (SPA React) sobe em `http://localhost:8085/`.
 
 ### Cenário de demonstração
 

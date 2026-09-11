@@ -1,10 +1,14 @@
+eu 
+
 # Arquitetura — Metas Levo
 
 > Entry point: [PROJECT.md](./PROJECT.md). Fonte de verdade: `docs/kickoff/01-problem-brief.md` e
 > `docs/kickoff/02-solution-design.md`. Projeto construído do zero — sem herança de versões anteriores.
 
 ## Estilo: monólito modular
+
 Não microserviços. Justificativa ligada ao brief:
+
 - Base de usuários pequena e conhecida (1 Gerente, 9 Locais, supervisores/vendedores —
   dezenas a poucas centenas).
 - O fechamento exato é uma invariante **ACID por natureza**: exige consistência transacional forte.
@@ -13,6 +17,7 @@ Não microserviços. Justificativa ligada ao brief:
 Microserviços introduziriam consistência distribuída sem nenhum benefício exigido pelo brief.
 
 ## Diagrama de alto nível
+
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                 Navegador (usuário interno)                        │
@@ -45,48 +50,50 @@ Microserviços introduziriam consistência distribuída sem nenhum benefício ex
 ```
 
 ## Componentes
-| Componente | Responsabilidade | Tecnologia |
-|---|---|---|
-| Frontend de distribuição | Grade de distribuição com feedback de soma em tempo real; telas por nível | React SPA (Vite + TypeScript) |
-| Painel do Administrador | CRUD de hierarquia, usuários, catálogo; visão geral, metas por nível, pendências, pré-processamento | React SPA (`/admin`), API DRF `IsAppAdmin` |
-| Backend / API | Regras de negócio, invariantes, autorização | Django 5.2 LTS + DRF (Python) |
-| Módulo Hierarquia | Árvore de nós/posições + closure table para consultas de subárvore | ORM + tabela de fechamento |
-| Módulo Catálogo | Grupos e subgrupos de produto + mapeamento p/ fonte externa | ORM |
-| Módulo Ciclos | Ciclo mensal e estado aberto/fechado | ORM |
-| Módulo Distribuição | Serviço transacional, validador de fechamento, checador de completude, estratégias | Serviços de domínio Python |
-| Módulo Auditoria | Histórico de criação/inativação/mudança de vínculo em hierarquia e catálogo (`AuditLogEntry`) | ORM (GenericForeignKey) |
+
+| Componente                              | Responsabilidade                                                                                                                                           | Tecnologia                                             |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Frontend de distribuição              | Grade de distribuição com feedback de soma em tempo real; telas por nível                                                                               | React SPA (Vite + TypeScript)                          |
+| Painel do Administrador                 | CRUD de hierarquia, usuários, catálogo; visão geral, metas por nível, pendências, pré-processamento                                                  | React SPA (`/admin`), API DRF `IsAppAdmin`         |
+| Backend / API                           | Regras de negócio, invariantes, autorização                                                                                                             | Django 5.2 LTS + DRF (Python)                          |
+| Módulo Hierarquia                      | Árvore de nós/posições + closure table para consultas de subárvore                                                                                    | ORM + tabela de fechamento                             |
+| Módulo Catálogo                       | Grupos e subgrupos de produto + mapeamento p/ fonte externa                                                                                                | ORM                                                    |
+| Módulo Ciclos                          | Ciclo mensal e estado aberto/fechado                                                                                                                       | ORM                                                    |
+| Módulo Distribuição                  | Serviço transacional, validador de fechamento, checador de completude, estratégias                                                                       | Serviços de domínio Python                           |
+| Módulo Auditoria                       | Histórico de criação/inativação/mudança de vínculo em hierarquia e catálogo (`AuditLogEntry`)                                                    | ORM (GenericForeignKey)                                |
 | Sincronização de histórico de vendas | Espelha acumulado + carteira do Postgres externo (`AccumulatedSale`, `ClientPortfolioSnapshot`) e deriva a base de cálculo (`DistributionBaseline`) | Conexão read-only isolada + management command mensal |
-| Banco da aplicação | Dados transacionais da aplicação | PostgreSQL |
+| Banco da aplicação                    | Dados transacionais da aplicação                                                                                                                         | PostgreSQL                                             |
 
 Modelo de dados detalhado em [data-model.md](./data-model.md). Racional das escolhas em
 [decisions.md](./decisions.md).
 
 ## API (DRF, sessão autenticada)
+
 Endpoints de distribuição para a SPA (`frontend/`). CRUD de hierarquia/catálogo/usuários mora na
 própria API desde a revisão da Decisão 4 — só os mapeamentos texto→entidade da Decisão 9
 (`ExternalProductMapping`/`ExternalSalespersonMapping`) e `Product` (fora do MVP, O1) continuam
 só no Django Admin.
 
-| Endpoint | Método | O que faz |
-|---|---|---|
-| `/api/auth/csrf/` | GET | Garante o cookie `csrftoken` antes do login (público) |
-| `/api/auth/login/` | POST | Autentica por sessão (usuário/senha, sem SSO) |
-| `/api/auth/logout/` | POST | Encerra a sessão |
-| `/api/auth/me/` | GET | Usuário autenticado + `hierarchy_nodes` (lista — O5, 1:N) |
-| `/api/hierarchy/nodes/` | GET/POST/PUT/PATCH | Nós visíveis (`HierarchyNode.objects.visible_to`); escrita só `IsAppAdmin`, sem `destroy` (inativa via `ativo=False`, nunca apaga); valida nível/pai e dispara O4 no update |
-| `/api/accounts/users/` | GET/POST/PUT/PATCH | CRUD de usuário (`IsAppAdmin`): username, senha (opcional na edição), `is_admin`, `is_active`, `hierarchy_node_ids`; sem `destroy` |
-| `/api/cycles/` | GET | Lista/detalhe de ciclos |
-| `/api/cycles/{id}/completeness/` | GET | `CycleCompletenessChecker` — alocações presas |
-| `/api/cycles/{id}/close/` | POST | `CloseCycleService.close` (400 se incompleto) |
-| `/api/cycles/{id}/distribution-overview/` | GET | `IsAppAdmin` — todas as alocações do ciclo, qualquer nível, para as telas de Metas/Pendências |
-| `/api/cycles/{id}/export/` | GET | `IsAppAdmin` — CSV com a árvore inteira de alocações do ciclo |
-| `/api/allocations/` | GET | Alocações visíveis (`GoalAllocation.objects.visible_to`), filtro `?cycle=` |
-| `/api/allocations/{id}/distribute/` | POST | `DistributeGoalService.distribute` (400 em erro de fechamento/escopo) |
-| `/api/allocations/{id}/reopen/` | POST | `ReopenAllocationService.reopen` (H4 — 400 se não distribuída, se o ciclo não está aberto, ou em erro de escopo) |
-| `/api/catalog/groups/` | GET/POST/PUT/PATCH | Grupos de produto; não-admin só vê ativos, admin vê todos; escrita `IsAppAdmin`, sem `destroy` |
-| `/api/catalog/subgroups/` | GET/POST/PUT/PATCH | Subgrupos, filtro `?group=`; mesmas regras de visibilidade/escrita dos grupos |
-| `/api/catalog/products/` | GET | Produtos ativos, filtro `?subgroup=` — só leitura (fora do MVP, O1) |
-| `/api/sales-history/sync/` | POST | `IsAppAdmin` — dispara `SalesHistorySyncService` + rebuild do `DistributionBaseline` |
+| Endpoint                                    | Método            | O que faz                                                                                                                                                                               |
+| ------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/api/auth/csrf/`                         | GET                | Garante o cookie`csrftoken` antes do login (público)                                                                                                                                 |
+| `/api/auth/login/`                        | POST               | Autentica por sessão (usuário/senha, sem SSO)                                                                                                                                         |
+| `/api/auth/logout/`                       | POST               | Encerra a sessão                                                                                                                                                                       |
+| `/api/auth/me/`                           | GET                | Usuário autenticado +`hierarchy_nodes` (lista — O5, 1:N)                                                                                                                            |
+| `/api/hierarchy/nodes/`                   | GET/POST/PUT/PATCH | Nós visíveis (`HierarchyNode.objects.visible_to`); escrita só `IsAppAdmin`, sem `destroy` (inativa via `ativo=False`, nunca apaga); valida nível/pai e dispara O4 no update |
+| `/api/accounts/users/`                    | GET/POST/PUT/PATCH | CRUD de usuário (`IsAppAdmin`): username, senha (opcional na edição), `is_admin`, `is_active`, `hierarchy_node_ids`; sem `destroy`                                         |
+| `/api/cycles/`                            | GET                | Lista/detalhe de ciclos                                                                                                                                                                 |
+| `/api/cycles/{id}/completeness/`          | GET                | `CycleCompletenessChecker` — alocações presas                                                                                                                                      |
+| `/api/cycles/{id}/close/`                 | POST               | `CloseCycleService.close` (400 se incompleto)                                                                                                                                         |
+| `/api/cycles/{id}/distribution-overview/` | GET                | `IsAppAdmin` — todas as alocações do ciclo, qualquer nível, para as telas de Metas/Pendências                                                                                    |
+| `/api/cycles/{id}/export/`                | GET                | `IsAppAdmin` — CSV com a árvore inteira de alocações do ciclo                                                                                                                     |
+| `/api/allocations/`                       | GET                | Alocações visíveis (`GoalAllocation.objects.visible_to`), filtro `?cycle=`                                                                                                       |
+| `/api/allocations/{id}/distribute/`       | POST               | `DistributeGoalService.distribute` (400 em erro de fechamento/escopo)                                                                                                                 |
+| `/api/allocations/{id}/reopen/`           | POST               | `ReopenAllocationService.reopen` (H4 — 400 se não distribuída, se o ciclo não está aberto, ou em erro de escopo)                                                                 |
+| `/api/catalog/groups/`                    | GET/POST/PUT/PATCH | Grupos de produto; não-admin só vê ativos, admin vê todos; escrita`IsAppAdmin`, sem `destroy`                                                                                   |
+| `/api/catalog/subgroups/`                 | GET/POST/PUT/PATCH | Subgrupos, filtro`?group=`; mesmas regras de visibilidade/escrita dos grupos                                                                                                          |
+| `/api/catalog/products/`                  | GET                | Produtos ativos, filtro`?subgroup=` — só leitura (fora do MVP, O1)                                                                                                                  |
+| `/api/sales-history/sync/`                | POST               | `IsAppAdmin` — dispara `SalesHistorySyncService` + rebuild do `DistributionBaseline`                                                                                             |
 
 Toda escrita de `GoalAllocation`/`Cycle` passa pelos serviços de domínio já existentes — a view
 nunca persiste diretamente (mesma regra do CLAUDE.md: regra de negócio fica no serviço). O CRUD de
@@ -97,6 +104,7 @@ compartilhado entre o Django Admin e a API — ver Decisão 4 (revisão) em
 [decisions.md](./decisions.md).
 
 ## Frontend (React SPA)
+
 `frontend/` — Vite + TypeScript, sessão autenticada via cookie (sem SSO, ver Decisão 4).
 
 - **Proxy em vez de CORS:** o dev server do Vite faz proxy de `/api/*` para `backend:8000`
@@ -124,6 +132,7 @@ compartilhado entre o Django Admin e a API — ver Decisão 4 (revisão) em
     só no Django Admin — curadoria pontual, fora do escopo pedido para a área do Administrador.
 
 ## Invariante 1 — Fechamento exato (local, por repasse)
+
 Regra rígida e não-negociável do brief: em cada nível, a soma distribuída para baixo fecha
 **exatamente** com o recebido de cima, em KG inteiro, sem sobra nem falta. Garantida pela
 arquitetura, **independente da fórmula**:
@@ -141,6 +150,7 @@ arquitetura, **independente da fórmula**:
    sobra/falta.
 
 ## Invariante 2 — Completude de ciclo (end-to-end, "100% chega ao Vendedor")
+
 A Invariante 1 é **local**: garante que nada se perde num repasse, mas não garante que a meta
 percorreu a árvore inteira até a ponta. Um ciclo poderia fechar com parcelas **presas** em níveis
 intermediários. O critério "100% chega aos vendedores" é uma propriedade **end-to-end distinta**:
@@ -161,6 +171,7 @@ intermediários. O critério "100% chega aos vendedores" é uma propriedade **en
    que o nó deles seja desativado/movido, nada dispara reatribuição automaticamente.
 
 ## Isolamento de escopo por ramo
+
 Princípio: **imposto na camada de dados, nunca só na UI.**
 
 1. **Leitura:** todo acesso a `HierarchyNode`/`GoalAllocation` passa por um manager/repositório base
@@ -180,10 +191,12 @@ Princípio: **imposto na camada de dados, nunca só na UI.**
    dois, e pode distribuir/reabrir alocações de qualquer um deles.
 
 ## Integração com o Postgres externo (Anticorruption Layer)
+
 O3 foi respondida pelo usuário: credenciais read-only e as duas queries reais (acumulado e
 carteira) já foram fornecidas e validadas contra o schema (`stage`/`stage_comercial`). Decisão
 tomada: **sem Fake Provider** — construído direto contra o schema real, com sincronização
 periódica em vez de leitura ao vivo:
+
 - **Conexão dedicada, somente leitura:** alias `sales_history` em `DATABASES`
   (`SALES_HISTORY_DATABASE_URL` no `.env`, nunca commitado), isolada do banco da aplicação. Nenhum
   model/migração é atribuído a esse alias — só cursor bruto.
@@ -228,9 +241,11 @@ periódica em vez de leitura ao vivo:
   `apps/sales_history/test_provider.py`.
 
 ## Ponto de extensão para as fórmulas (plugável)
+
 Das 5 pendências de cálculo (ver [open-questions.md](./open-questions.md)), **todas têm fórmula
 aprovada** — P1-P4 (Decisão 6) e P5 (Decisão 7). Fórmula aprovada não significa fórmula travada:
 continuam plugáveis por design, caso alguma precise ser revista depois.
+
 - **`DistributionStrategy`** — dado `total_kg` (inteiro recebido) e a lista de alvos (filhos diretos +
   contexto, ex.: histórico via `SalesHistoryProvider`), retorna `{alvo: quantidade_kg}`. Cobre
   distribuição Gerente→Local (P2), quebra Grupo→Subgrupo (P3), distribuição Supervisor→Vendedor (P4).
@@ -262,9 +277,11 @@ continuam plugáveis por design, caso alguma precise ser revista depois.
   independente da origem (manual ou auto).
 
 ## Reabertura em cascata (H4) — IMPLEMENTADO
+
 Enquanto o ciclo está ABERTO, o nível que distribuiu uma alocação pode reabri-la e refazer o
 repasse, sem aprovação formal (hipótese H4). Implementado em `ReopenAllocationService`
 (`backend/apps/allocations/services.py`) e exposto via `POST /api/allocations/{id}/reopen/`.
+
 1. **Invalidação do ramo afetado:** `ReopenAllocationService.reopen()` percorre toda a sub-árvore
    de filhas abaixo da alocação (via `parent_allocation`, nível por nível) e **apaga** essas linhas
    (da folha mais profunda para cima, respeitando `on_delete=PROTECT`), registrando o que foi
@@ -291,16 +308,17 @@ repasse, sem aprovação formal (hipótese H4). Implementado em `ReopenAllocatio
    afetado.
 
 ## Rastreabilidade — como cada restrição do brief é atendida
-| Restrição | Como a solução atende |
-|---|---|
-| Web interno | Monólito modular servindo SPA + Django Admin |
-| Login próprio usuário/senha, sem SSO | Módulo Auth com credenciais próprias; sem IdP externo |
-| Ciclo mensal | Entidade `Cycle` (ano, mês, status), unicidade por mês |
-| KG sempre inteiro | `quantity_kg` inteiro + CHECK; validador rejeita não-inteiros |
-| Fechamento exato (rígido) | `ClosureValidator` + serviço transacional, independente da fórmula |
-| 100% chega aos vendedores | `CycleCompletenessChecker` como gate de fechamento |
-| Isolamento de escopo por ramo | Filtro por subárvore (closure table) na camada de dados + checagem object-level |
-| Hierarquia fixa de 4 níveis, granularidade variável | `HierarchyNode.level` + `granularity` por alocação |
-| Fórmulas plugáveis sem retrabalho | Interfaces Strategy/RoundingPolicy + registry |
-| Auditabilidade | Encadeamento `parent_allocation` + metadados de auditoria |
-| Reabertura consistente (H4) | Invalidação em cascata do ramo + retorno a "incompleto" — `ReopenAllocationService`, implementado |
+
+| Restrição                                           | Como a solução atende                                                                               |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Web interno                                           | Monólito modular servindo SPA + Django Admin                                                         |
+| Login próprio usuário/senha, sem SSO                | Módulo Auth com credenciais próprias; sem IdP externo                                               |
+| Ciclo mensal                                          | Entidade`Cycle` (ano, mês, status), unicidade por mês                                             |
+| KG sempre inteiro                                     | `quantity_kg` inteiro + CHECK; validador rejeita não-inteiros                                      |
+| Fechamento exato (rígido)                            | `ClosureValidator` + serviço transacional, independente da fórmula                                |
+| 100% chega aos vendedores                             | `CycleCompletenessChecker` como gate de fechamento                                                  |
+| Isolamento de escopo por ramo                         | Filtro por subárvore (closure table) na camada de dados + checagem object-level                      |
+| Hierarquia fixa de 4 níveis, granularidade variável | `HierarchyNode.level` + `granularity` por alocação                                              |
+| Fórmulas plugáveis sem retrabalho                   | Interfaces Strategy/RoundingPolicy + registry                                                         |
+| Auditabilidade                                        | Encadeamento`parent_allocation` + metadados de auditoria                                            |
+| Reabertura consistente (H4)                           | Invalidação em cascata do ramo + retorno a "incompleto" —`ReopenAllocationService`, implementado |

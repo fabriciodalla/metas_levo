@@ -149,42 +149,71 @@ class ExternalSalespersonMatchingServiceTests(TestCase):
 
 
 class FeristaCoverageTests(TestCase):
-    """Decisão 13 (2026-07-22): ferista não tem nó/mapeamento próprio — só um vínculo por mês ao
-    vendedor titular que ele cobriu."""
+    """Decisão 13, revisão 2026-09-10: ferista é um Vendedor normal (`covering_node`) — pode
+    cobrir mais de um titular no mesmo mês, mas um titular (`covered_node`) só é coberto por um
+    ferista por mês."""
 
     def setUp(self):
-        self.vendedor = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Titular")
+        self.titular = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Titular")
+        self.ferista = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Ferista")
 
-    def test_links_external_name_to_covered_node_and_month(self):
+    def test_links_covering_node_to_covered_node_and_month(self):
         coverage = FeristaCoverage.objects.create(
-            external_name="FERISTA DA SILVA", covered_node=self.vendedor, ano=2026, mes=3
+            covering_node=self.ferista, covered_node=self.titular, ano=2026, mes=3
         )
 
-        self.assertEqual(coverage.covered_node, self.vendedor)
+        self.assertEqual(coverage.covering_node, self.ferista)
+        self.assertEqual(coverage.covered_node, self.titular)
 
     def test_rejects_covered_node_that_is_not_vendedor(self):
         supervisor = HierarchyNode.objects.create(level=HierarchyNode.Level.SUPERVISOR, nome="Supervisor")
-        coverage = FeristaCoverage(external_name="FERISTA", covered_node=supervisor, ano=2026, mes=3)
+        coverage = FeristaCoverage(covering_node=self.ferista, covered_node=supervisor, ano=2026, mes=3)
 
         with self.assertRaises(ValidationError):
             coverage.full_clean()
 
-    def test_same_ferista_cannot_cover_two_people_in_the_same_month(self):
-        other_vendedor = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Outro")
-        FeristaCoverage.objects.create(external_name="FERISTA", covered_node=self.vendedor, ano=2026, mes=3)
+    def test_rejects_covering_node_that_is_not_vendedor(self):
+        supervisor = HierarchyNode.objects.create(level=HierarchyNode.Level.SUPERVISOR, nome="Supervisor")
+        coverage = FeristaCoverage(covering_node=supervisor, covered_node=self.titular, ano=2026, mes=3)
+
+        with self.assertRaises(ValidationError):
+            coverage.full_clean()
+
+    def test_rejects_ferista_covering_itself(self):
+        coverage = FeristaCoverage(covering_node=self.ferista, covered_node=self.ferista, ano=2026, mes=3)
+
+        with self.assertRaises(ValidationError):
+            coverage.full_clean()
+
+    def test_same_ferista_can_cover_two_titulares_in_the_same_month(self):
+        other_titular = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Outro")
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2026, mes=3)
+
+        second = FeristaCoverage.objects.create(
+            covering_node=self.ferista, covered_node=other_titular, ano=2026, mes=3
+        )
+
+        self.assertEqual(
+            set(FeristaCoverage.objects.filter(covering_node=self.ferista, ano=2026, mes=3)),
+            {FeristaCoverage.objects.get(covered_node=self.titular), second},
+        )
+
+    def test_same_titular_cannot_be_covered_twice_in_the_same_month(self):
+        other_ferista = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Outro Ferista")
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2026, mes=3)
 
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
                 FeristaCoverage.objects.create(
-                    external_name="FERISTA", covered_node=other_vendedor, ano=2026, mes=3
+                    covering_node=other_ferista, covered_node=self.titular, ano=2026, mes=3
                 )
 
     def test_same_ferista_can_cover_different_people_in_different_months(self):
-        other_vendedor = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Outro")
-        FeristaCoverage.objects.create(external_name="FERISTA", covered_node=self.vendedor, ano=2026, mes=3)
+        other_titular = HierarchyNode.objects.create(level=HierarchyNode.Level.VENDEDOR, nome="Outro")
+        FeristaCoverage.objects.create(covering_node=self.ferista, covered_node=self.titular, ano=2026, mes=3)
 
         coverage_abril = FeristaCoverage.objects.create(
-            external_name="FERISTA", covered_node=other_vendedor, ano=2026, mes=4
+            covering_node=self.ferista, covered_node=other_titular, ano=2026, mes=4
         )
 
-        self.assertEqual(coverage_abril.covered_node, other_vendedor)
+        self.assertEqual(coverage_abril.covered_node, other_titular)
