@@ -20,6 +20,15 @@ from .services import (
 )
 
 
+def _csv_safe(value):
+    """Prefixa com apóstrofo campos que comecem com =, +, - ou @ — sem isso, um nome vindo do
+    ERP externo pode ser interpretado como fórmula ao abrir o CSV no Excel/LibreOffice (CSV
+    injection)."""
+    if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@"):
+        return "'" + value
+    return value
+
+
 class SyncDataView(APIView):
     """Dispara manualmente, a partir do SPA, o que hoje já roda via `sync_sales_history` (CLI):
     sincroniza o Postgres externo (somente leitura) e reconstrói a base de distribuição.
@@ -90,9 +99,9 @@ class VendorSubgroupExportView(APIView):
         for row in rows:
             writer.writerow(
                 [
-                    row.local_nome,
-                    row.vendedor_nome,
-                    row.subgrupo_nome,
+                    _csv_safe(row.local_nome),
+                    _csv_safe(row.vendedor_nome),
+                    _csv_safe(row.subgrupo_nome),
                     row.sum_3_months_kg,
                     row.sum_12_months_kg,
                     f"{row.avg_3_months_kg:.2f}",

@@ -17,7 +17,16 @@ from .models import Cycle
 from .serializers import CycleSerializer, StuckAllocationSerializer
 from .services import CloseCycleService, CycleAlreadyExistsError, CycleNotCompleteError, OpenCycleService
 
-ADMIN_ONLY_ACTIONS = ("open", "distribution_overview", "export", "vendedor_report")
+ADMIN_ONLY_ACTIONS = ("open", "close", "completeness", "distribution_overview", "export", "vendedor_report")
+
+
+def _csv_safe(value):
+    """Prefixa com apóstrofo campos que comecem com =, +, - ou @ — sem isso, um nome vindo do
+    ERP externo pode ser interpretado como fórmula ao abrir o CSV no Excel/LibreOffice (CSV
+    injection)."""
+    if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@"):
+        return "'" + value
+    return value
 
 
 class CycleViewSet(ReadOnlyModelViewSet):
@@ -122,12 +131,12 @@ class CycleViewSet(ReadOnlyModelViewSet):
         for row in rows:
             writer.writerow(
                 [
-                    row.gerente_nome,
-                    row.local_nome,
-                    row.supervisor_nome,
-                    row.vendedor_nome,
-                    row.grupo_nome,
-                    row.subgrupo_nome,
+                    _csv_safe(row.gerente_nome),
+                    _csv_safe(row.local_nome),
+                    _csv_safe(row.supervisor_nome),
+                    _csv_safe(row.vendedor_nome),
+                    _csv_safe(row.grupo_nome),
+                    _csv_safe(row.subgrupo_nome),
                     row.quantity_kg,
                     ciclo_label,
                     row.status,

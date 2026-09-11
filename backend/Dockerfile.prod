@@ -1,0 +1,22 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Só requirements.txt (sem pytest/black/ruff) — imagem de produção não precisa de ferramental de
+# desenvolvimento; testes continuam rodando exclusivamente na stack de dev.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+RUN chmod +x entrypoint.prod.sh
+
+EXPOSE 8000
+
+ENTRYPOINT ["./entrypoint.prod.sh"]

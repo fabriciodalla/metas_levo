@@ -1,0 +1,58 @@
+# Stack de produção — separada de docker-compose.yml (dev) de propósito, ver CLAUDE.md.
+# Uso:
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml exec backend python manage.py migrate  (manual, 1x por deploy com migração nova)
+#
+# Backend: gunicorn + collectstatic automático no start (backend/entrypoint.prod.sh).
+# Frontend: build estático do Vite servido por nginx, que também faz proxy de /api/, /admin/ e
+# /static/ pro backend (frontend/nginx.conf) — mesma origem pra SPA e API, sem CORS.
+name: metaslevo_prod
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-metaslevo}
+      POSTGRES_USER: ${POSTGRES_USER:-metaslevo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-metaslevo}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-metaslevo}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    env_file:
+      - .env
+    environment:
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-3}
+      GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-60}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/admin/login/')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    ports:
+      - "${PROD_HTTP_PORT:-8080}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

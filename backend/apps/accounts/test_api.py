@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.core import mail
+from django.core.cache import cache
 from django.urls import reverse
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
@@ -80,6 +81,28 @@ class AuthApiTests(APITestCase):
         response = self.client.get(reverse("auth-me"))
 
         self.assertIn(response.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+
+class LoginThrottleApiTests(APITestCase):
+    """A-03: sem isso, /api/auth/login/ aceitava tentativas ilimitadas (força bruta)."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_blocks_after_too_many_attempts(self):
+        payload = {"email": "ninguem@levo.local", "password": "errada"}
+
+        # settings.py define o scope "login" com 15/min — a 16ª tentativa no mesmo minuto estoura.
+        for _ in range(15):
+            response = self.client.post(reverse("auth-login"), payload, format="json")
+            self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        response = self.client.post(reverse("auth-login"), payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
 
 
 class UserAccountApiTests(APITestCase):
@@ -402,6 +425,20 @@ class UserAccountApiTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_create_with_weak_password_is_rejected(self):
+        """A-02: os validadores de AUTH_PASSWORD_VALIDATORS (settings.py) precisam rodar de
+        verdade nesse caminho — antes da correção, senha "1" era aceita sem nenhum aviso."""
+        self.client.force_login(self.admin)
+
+        response = self.client.post(
+            reverse("user-account-list"),
+            {"username": "senha-fraca", "email": "senha-fraca@levo.local", "password": "1"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", response.data)
+        self.assertFalse(User.objects.filter(username="senha-fraca").exists())
 
     def test_inactivating_user_deactivates_their_orphaned_position(self):
         """Bug real (2026-07-22): desligar alguém (is_active=False) não desativava o nó da
@@ -765,6 +802,21 @@ class PasswordResetApiTests(APITestCase):
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password("senha-antiga"))
 
+    def test_confirm_with_weak_password_is_rejected(self):
+        """A-02: mesma trava do cadastro de usuário, aplicada aqui no fluxo de link por e-mail."""
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk))
+        token = PasswordResetTokenGenerator().make_token(self.user)
+
+        response = self.client.post(
+            reverse("auth-password-reset-confirm"),
+            {"uid": uid, "token": token, "new_password": "1"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("senha-antiga"))
+
 
 class PasswordChangeApiTests(APITestCase):
     def setUp(self):
@@ -812,6 +864,20 @@ class PasswordChangeApiTests(APITestCase):
         response = self.client.post(
             reverse("auth-password-change"),
             {"current_password": "senha-errada", "new_password": "senha-nova-123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("senha-antiga"))
+
+    def test_rejects_weak_new_password(self):
+        """A-02: mesma trava aplicada na troca de senha pelo próprio usuário logado."""
+        self.client.force_login(self.user)
+
+        response = self.client.post(
+            reverse("auth-password-change"),
+            {"current_password": "senha-antiga", "new_password": "1"},
             format="json",
         )
 

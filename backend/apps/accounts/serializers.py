@@ -1,3 +1,5 @@
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from apps.hierarchy.models import HierarchyNode
@@ -5,6 +7,17 @@ from apps.hierarchy.serializers import HierarchyNodeSerializer
 
 from .models import User
 from .services import deactivate_if_orphaned, sync_primary_position
+
+
+def _validate_strong_password(value, user=None):
+    """Aciona os `AUTH_PASSWORD_VALIDATORS` (settings.py) — sem isso, os 3 pontos de entrada de
+    senha da API (cadastro, troca, redefinição) chamavam `set_password`/`create_user` direto e
+    aceitavam qualquer coisa, inclusive senha "1" (achado A-02)."""
+    try:
+        validate_password(value, user)
+    except DjangoValidationError as exc:
+        raise serializers.ValidationError(list(exc.messages))
+    return value
 
 
 class HierarchyNodeSummarySerializer(serializers.ModelSerializer):
@@ -41,10 +54,21 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
     token = serializers.CharField()
     new_password = serializers.CharField(write_only=True)
 
+    def validate_new_password(self, value):
+        # O usuário só é decodificado depois da validação do serializer (a partir do uid), então
+        # a checagem de similaridade com username/e-mail não roda aqui — os outros 3 validadores
+        # (tamanho, senha comum, só números) seguem valendo.
+        return _validate_strong_password(value)
+
 
 class PasswordChangeSerializer(serializers.Serializer):
     current_password = serializers.CharField(write_only=True)
     new_password = serializers.CharField(write_only=True)
+
+    def validate_new_password(self, value):
+        request = self.context.get("request")
+        user = request.user if request else None
+        return _validate_strong_password(value, user)
 
 
 class AddUserPositionSerializer(serializers.Serializer):
@@ -120,6 +144,11 @@ class UserAccountSerializer(serializers.ModelSerializer):
         if self.instance is None and not attrs.get("password"):
             raise serializers.ValidationError({"password": "Senha é obrigatória para criar um usuário."})
         return attrs
+
+    def validate_password(self, value):
+        # Em atualização, compara com os dados do próprio usuário sendo editado (similaridade
+        # com username/e-mail); em criação, `self.instance` ainda não existe.
+        return _validate_strong_password(value, self.instance)
 
     def create(self, validated_data):
         password = validated_data.pop("password")

@@ -62,6 +62,30 @@ docker compose exec backend ruff check --fix .           # lint + autofix
 Depois de alterar `models.py`, sempre gere e aplique a migração antes de considerar a tarefa
 concluída — models sem migração correspondente quebram `manage.py check` e `migrate`.
 
+## Stack de produção (`docker-compose.prod.yml`)
+
+Existe uma segunda stack, completa e separada da de dev: `docker-compose.prod.yml` +
+`backend/Dockerfile.prod` + `backend/entrypoint.prod.sh` + `frontend/Dockerfile.prod` +
+`frontend/nginx.conf`. Ela serve o backend via `gunicorn` (com `collectstatic`/`whitenoise` pros
+estáticos do Django Admin) e o frontend como build estático do Vite atrás de um `nginx` que faz
+proxy de `/api/`, `/admin/` e `/static/` pro backend — pensada pro deploy real (hoje, servidor
+interno atrás de túnel Cloudflare, sempre HTTPS).
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml exec backend python manage.py migrate   # manual, de propósito
+```
+
+Regra que vale pra qualquer mudança futura: **a stack de dev (`docker-compose.yml`,
+`backend/Dockerfile`, `frontend/Dockerfile`) nunca deve ser alterada por causa de uma necessidade
+da stack de produção** — são arquivos irmãos, não uma variação um do outro. Única exceção:
+mudanças em `backend/config/settings.py` são compartilhadas (é um arquivo só pros dois ambientes),
+mas sempre precisam continuar seguras em `DEBUG=True` sem efeito nenhum no `runserver`/dev.
+
+`docker compose -f docker-compose.prod.yml exec backend pytest` não funciona de propósito (a
+imagem de produção só instala `requirements.txt`, sem `pytest`/`black`/`ruff`) — testes continuam
+rodando só na stack de dev.
+
 ## Antes de considerar uma mudança de backend pronta
 
 1. `docker compose exec backend python manage.py makemigrations` (se mexeu em models) e

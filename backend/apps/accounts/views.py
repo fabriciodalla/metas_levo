@@ -10,6 +10,7 @@ from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from .models import User
@@ -40,6 +41,8 @@ class CsrfView(APIView):
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "login"
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
@@ -71,6 +74,8 @@ class PasswordResetRequestView(APIView):
     esse endpoint para descobrir quais e-mails estão cadastrados."""
 
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_reset"
 
     GENERIC_DETAIL = "Se o e-mail existir, você vai receber um link para definir a senha."
 
@@ -129,7 +134,7 @@ class PasswordChangeView(APIView):
     `PasswordResetConfirmView`, usado no fluxo de link por e-mail sem sessão ativa)."""
 
     def post(self, request):
-        serializer = PasswordChangeSerializer(data=request.data)
+        serializer = PasswordChangeSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 

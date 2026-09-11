@@ -33,7 +33,16 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     let detail = `Erro ${response.status}`;
     try {
       const body = await response.json();
-      detail = body.detail ?? JSON.stringify(body);
+      if (typeof body?.detail === "string") {
+        detail = body.detail;
+      } else if (body && typeof body === "object") {
+        // Erro de validação por campo (ex.: {"new_password": ["Senha muito curta."]}) — junta
+        // todas as mensagens de string em vez de mostrar o JSON cru pro usuário.
+        const messages = Object.values(body)
+          .flat()
+          .filter((value): value is string => typeof value === "string");
+        detail = messages.length > 0 ? messages.join(" ") : JSON.stringify(body);
+      }
     } catch {
       // corpo não é JSON; mantém a mensagem genérica
     }

@@ -7,13 +7,31 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 env = environ.Env()
 environ.Env.read_env(BASE_DIR.parent / ".env")
 
-SECRET_KEY = env("DJANGO_SECRET_KEY", default="django-insecure-dev-only-change-me")
+# Sem default: preferimos falhar alto (o processo nem sobe) a rodar com uma chave insegura
+# conhecida publicamente — .env.example já traz um valor placeholder pra todo ambiente novo.
+SECRET_KEY = env("DJANGO_SECRET_KEY")
 DEBUG = env.bool("DJANGO_DEBUG", default=False)
 ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 
 # Origin do frontend (Vite dev server) — necessário porque o proxy do Vite preserva o header
 # Origin do navegador mesmo reescrevendo o Host para o alvo interno (ver docker-compose.yml).
 CSRF_TRUSTED_ORIGINS = env.list("DJANGO_CSRF_TRUSTED_ORIGINS", default=["http://localhost:5173"])
+
+# Liga cookies só-HTTPS e HSTS por padrão sempre que DEBUG=False (deploy real, hoje acessado só
+# via túnel Cloudflare, sempre HTTPS) — em DEBUG=True (dev local, http://localhost) fica desligado
+# por padrão, senão o cookie de sessão nunca seria gravado/enviado e ninguém logaria localmente.
+# Pode ser forçado nos dois sentidos via DJANGO_SECURE_COOKIES.
+DJANGO_SECURE_COOKIES = env.bool("DJANGO_SECURE_COOKIES", default=not DEBUG)
+SESSION_COOKIE_SECURE = DJANGO_SECURE_COOKIES
+CSRF_COOKIE_SECURE = DJANGO_SECURE_COOKIES
+SESSION_COOKIE_SAMESITE = "Lax"
+SECURE_CONTENT_TYPE_NOSNIFF = True
+# O túnel Cloudflare encerra HTTPS na borda e repassa X-Forwarded-Proto pro backend — sem isso,
+# o Django nunca reconhece a requisição como segura e o cabeçalho HSTS abaixo nunca seria emitido.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+if DJANGO_SECURE_COOKIES:
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 
 
 INSTALLED_APPS = [
@@ -35,6 +53,10 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Precisa vir logo depois do SecurityMiddleware (ordem exigida pela doc do whitenoise). Em dev
+    # (`runserver`, sem STATIC_ROOT/collectstatic) simplesmente não encontra nada pra servir e
+    # repassa a requisição adiante — zero efeito fora de produção.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -94,12 +116,28 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
+# Link de "definir/redefinir senha" enviado por e-mail: 24h em vez do padrão do Django (3 dias) —
+# é um link de acesso inicial, uma janela mais curta é suficiente e mais segura.
+PASSWORD_RESET_TIMEOUT = 60 * 60 * 24
+
 LANGUAGE_CODE = "pt-br"
 TIME_ZONE = "America/Sao_Paulo"
 USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+# Só é usado em produção — `collectstatic` roda no entrypoint do container (Dockerfile.prod), nunca
+# em dev (`runserver` serve os estáticos sozinho, sem precisar de STATIC_ROOT).
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -110,4 +148,11 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    # Só nos endpoints de login e recuperação de senha (via throttle_scope nas views) — sem
+    # isso, os dois aceitavam tentativas ilimitadas, viabilizando força bruta e uso do endpoint
+    # de reset como disparador de e-mail em massa (achado A-03).
+    "DEFAULT_THROTTLE_RATES": {
+        "login": "15/min",
+        "password_reset": "5/min",
+    },
 }
