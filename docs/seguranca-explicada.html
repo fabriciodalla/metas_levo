@@ -1,0 +1,640 @@
+<title>Segurança do Metas Levo</title>
+<style>
+  :root {
+    --bg: #F1F6F0;
+    --surface: #FFFFFF;
+    --surface-2: #E7EFE4;
+    --ink: #16241F;
+    --ink-soft: #4A5C53;
+    --ink-faint: #74887D;
+    --border: #D7E2D2;
+    --brand: #17413B;
+    --brand-strong: #0E2E29;
+    --brand-tint: #DCEEE4;
+    --gold: #8C6A22;
+    --gold-fill: #BC933F;
+    --gold-tint: #F6E9CE;
+
+    --sev-alta-bg: #FBE4E1;
+    --sev-alta-fg: #8A2E27;
+    --sev-alta-brd: #EFC3BC;
+    --sev-media-bg: #FCEED4;
+    --sev-media-fg: #7A5410;
+    --sev-media-brd: #EAD09B;
+    --sev-baixa-bg: #E6EDF0;
+    --sev-baixa-fg: #3E5560;
+    --sev-baixa-brd: #C7D6DB;
+
+    --imp-safe-bg: #DCEEE1;
+    --imp-safe-fg: #1F5C3F;
+    --imp-safe-dot: #2E7D5B;
+    --imp-changes-bg: #F6E9CE;
+    --imp-changes-fg: #7A5817;
+    --imp-changes-dot: #B8862E;
+    --imp-decide-bg: #E9E3F5;
+    --imp-decide-fg: #4A3B7A;
+    --imp-decide-dot: #6B57A8;
+
+    --urgent-bg: #FBEAE8;
+    --urgent-brd: #DE8478;
+    --urgent-fg: #7A2A21;
+
+    --shadow: 0 1px 2px rgba(14, 46, 41, 0.06), 0 8px 24px rgba(14, 46, 41, 0.05);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0E1713;
+      --surface: #152420;
+      --surface-2: #1B2C26;
+      --ink: #E7EFE9;
+      --ink-soft: #A9BBB1;
+      --ink-faint: #7C9088;
+      --border: #26362F;
+      --brand: #6FBBA0;
+      --brand-strong: #8FD4B2;
+      --brand-tint: rgba(111, 187, 160, 0.14);
+      --gold: #D9AE5C;
+      --gold-fill: #D9AE5C;
+      --gold-tint: rgba(217, 174, 92, 0.14);
+
+      --sev-alta-bg: rgba(224, 104, 92, 0.16);
+      --sev-alta-fg: #F0A79E;
+      --sev-alta-brd: rgba(224, 104, 92, 0.35);
+      --sev-media-bg: rgba(216, 164, 60, 0.16);
+      --sev-media-fg: #F0C97F;
+      --sev-media-brd: rgba(216, 164, 60, 0.35);
+      --sev-baixa-bg: rgba(140, 170, 185, 0.16);
+      --sev-baixa-fg: #BCCBD1;
+      --sev-baixa-brd: rgba(140, 170, 185, 0.35);
+
+      --imp-safe-bg: rgba(60, 150, 110, 0.16);
+      --imp-safe-fg: #8FD4B2;
+      --imp-safe-dot: #4FBF8D;
+      --imp-changes-bg: rgba(200, 150, 60, 0.16);
+      --imp-changes-fg: #F0C97F;
+      --imp-changes-dot: #D9AE5C;
+      --imp-decide-bg: rgba(120, 100, 190, 0.18);
+      --imp-decide-fg: #C7BCEC;
+      --imp-decide-dot: #9A85D6;
+
+      --urgent-bg: rgba(224, 104, 92, 0.12);
+      --urgent-brd: rgba(224, 104, 92, 0.5);
+      --urgent-fg: #F0A79E;
+
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 8px 24px rgba(0, 0, 0, 0.25);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0E1713;
+    --surface: #152420;
+    --surface-2: #1B2C26;
+    --ink: #E7EFE9;
+    --ink-soft: #A9BBB1;
+    --ink-faint: #7C9088;
+    --border: #26362F;
+    --brand: #6FBBA0;
+    --brand-strong: #8FD4B2;
+    --brand-tint: rgba(111, 187, 160, 0.14);
+    --gold: #D9AE5C;
+    --gold-fill: #D9AE5C;
+    --gold-tint: rgba(217, 174, 92, 0.14);
+
+    --sev-alta-bg: rgba(224, 104, 92, 0.16);
+    --sev-alta-fg: #F0A79E;
+    --sev-alta-brd: rgba(224, 104, 92, 0.35);
+    --sev-media-bg: rgba(216, 164, 60, 0.16);
+    --sev-media-fg: #F0C97F;
+    --sev-media-brd: rgba(216, 164, 60, 0.35);
+    --sev-baixa-bg: rgba(140, 170, 185, 0.16);
+    --sev-baixa-fg: #BCCBD1;
+    --sev-baixa-brd: rgba(140, 170, 185, 0.35);
+
+    --imp-safe-bg: rgba(60, 150, 110, 0.16);
+    --imp-safe-fg: #8FD4B2;
+    --imp-safe-dot: #4FBF8D;
+    --imp-changes-bg: rgba(200, 150, 60, 0.16);
+    --imp-changes-fg: #F0C97F;
+    --imp-changes-dot: #D9AE5C;
+    --imp-decide-bg: rgba(120, 100, 190, 0.18);
+    --imp-decide-fg: #C7BCEC;
+    --imp-decide-dot: #9A85D6;
+
+    --urgent-bg: rgba(224, 104, 92, 0.12);
+    --urgent-brd: rgba(224, 104, 92, 0.5);
+    --urgent-fg: #F0A79E;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 8px 24px rgba(0, 0, 0, 0.25);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    padding-inline: 20px;
+  }
+
+  .page {
+    max-width: 780px;
+    margin-inline: auto;
+    padding-block: 48px 64px;
+  }
+
+  h1, h2, h3 { font-family: "Fraunces", Georgia, serif; text-wrap: balance; color: var(--brand-strong); }
+
+  .eyebrow {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--gold);
+  }
+
+  header.masthead {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 28px;
+    margin-bottom: 32px;
+  }
+
+  h1.title {
+    font-size: clamp(1.9rem, 4vw, 2.5rem);
+    font-weight: 600;
+    margin: 10px 0 14px;
+    line-height: 1.12;
+  }
+
+  .lede {
+    font-size: 1.05rem;
+    color: var(--ink-soft);
+    max-width: 62ch;
+  }
+
+  .meta-line {
+    margin-top: 14px;
+    font-size: 0.85rem;
+    color: var(--ink-faint);
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin: 28px 0 24px;
+  }
+
+  .stat-tile {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 14px;
+    box-shadow: var(--shadow);
+  }
+
+  .stat-num {
+    font-family: "Fraunces", serif;
+    font-size: 2.1rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
+  .stat-tile.alta .stat-num { color: var(--sev-alta-fg); }
+  .stat-tile.media .stat-num { color: var(--sev-media-fg); }
+  .stat-tile.baixa .stat-num { color: var(--sev-baixa-fg); }
+  .stat-tile.ok .stat-num { color: var(--imp-safe-fg); }
+
+  .stat-label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ink);
+    margin-top: 8px;
+  }
+
+  .stat-sub {
+    font-size: 0.8rem;
+    color: var(--ink-faint);
+    margin-top: 3px;
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    padding: 14px 16px;
+    background: var(--surface-2);
+    border-radius: 10px;
+    margin-bottom: 32px;
+    font-size: 0.85rem;
+  }
+
+  .legend-item { display: flex; align-items: center; gap: 7px; color: var(--ink-soft); }
+
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .dot.safe { background: var(--imp-safe-dot); }
+  .dot.changes { background: var(--imp-changes-dot); }
+  .dot.decide { background: var(--imp-decide-dot); }
+
+  .callout {
+    background: var(--urgent-bg);
+    border: 1px solid var(--urgent-brd);
+    border-left: 4px solid var(--urgent-brd);
+    border-radius: 10px;
+    padding: 20px 22px;
+    margin-bottom: 44px;
+  }
+
+  .callout .eyebrow { color: var(--urgent-fg); }
+  .callout h2 { font-size: 1.3rem; margin: 8px 0 10px; }
+  .callout p { color: var(--ink-soft); margin: 0; }
+  .callout p + p { margin-top: 10px; }
+  .callout code { background: transparent; color: var(--urgent-fg); font-weight: 600; }
+
+  section.sev-group { margin-bottom: 40px; }
+
+  .sev-heading {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sev-heading h2 { font-size: 1.3rem; margin: 0; }
+  .sev-heading .count { font-size: 0.85rem; color: var(--ink-faint); font-family: "Source Sans 3", sans-serif; }
+
+  .findings { display: flex; flex-direction: column; gap: 14px; }
+
+  .finding {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    box-shadow: var(--shadow);
+  }
+
+  .finding-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+
+  .fid {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.78rem;
+    color: var(--ink-faint);
+    letter-spacing: 0.02em;
+  }
+
+  .pill {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+  }
+
+  .pill.alta { background: var(--sev-alta-bg); color: var(--sev-alta-fg); border-color: var(--sev-alta-brd); }
+  .pill.media { background: var(--sev-media-bg); color: var(--sev-media-fg); border-color: var(--sev-media-brd); }
+  .pill.baixa { background: var(--sev-baixa-bg); color: var(--sev-baixa-fg); border-color: var(--sev-baixa-brd); }
+
+  .finding h3 { font-size: 1.08rem; margin: 0 0 8px; color: var(--ink); font-weight: 700; font-family: "Source Sans 3", sans-serif; }
+
+  .finding p.body-text { color: var(--ink-soft); margin: 0 0 12px; font-size: 0.96rem; }
+
+  .impact-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    padding: 5px 10px 5px 8px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+  }
+
+  .impact-chip.safe { background: var(--imp-safe-bg); color: var(--imp-safe-fg); }
+  .impact-chip.changes { background: var(--imp-changes-bg); color: var(--imp-changes-fg); }
+  .impact-chip.decide { background: var(--imp-decide-bg); color: var(--imp-decide-fg); }
+
+  .impact-note { color: var(--ink-soft); font-size: 0.92rem; margin: 0 0 12px; }
+
+  .finding-meta {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 0.78rem;
+    color: var(--ink-faint);
+    border-top: 1px dashed var(--border);
+    padding-top: 10px;
+  }
+
+  .finding-meta code {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    background: var(--surface-2);
+    padding: 1px 6px;
+    border-radius: 5px;
+    color: var(--ink-soft);
+  }
+
+  .verified {
+    background: var(--surface-2);
+    border-radius: 12px;
+    padding: 22px 22px 8px;
+    margin-bottom: 40px;
+  }
+
+  .verified h2 { font-size: 1.3rem; margin: 0 0 4px; }
+  .verified > p.body-text { color: var(--ink-soft); margin: 0 0 16px; font-size: 0.93rem; }
+
+  .verified-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px 18px;
+    padding-bottom: 14px;
+  }
+
+  .verified-item {
+    display: flex;
+    gap: 10px;
+    font-size: 0.9rem;
+    color: var(--ink-soft);
+  }
+
+  .check {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--imp-safe-bg);
+    color: var(--imp-safe-fg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.7rem;
+    font-weight: 700;
+    margin-top: 2px;
+  }
+
+  .order-section h2 { font-size: 1.3rem; margin-bottom: 4px; }
+  .order-section > p.body-text { color: var(--ink-soft); margin: 0 0 18px; font-size: 0.93rem; }
+
+  ol.steps {
+    list-style: none;
+    counter-reset: step;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 48px;
+  }
+
+  ol.steps li {
+    counter-increment: step;
+    display: flex;
+    gap: 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    align-items: flex-start;
+  }
+
+  ol.steps li::before {
+    content: counter(step);
+    font-family: "Fraunces", serif;
+    font-weight: 600;
+    font-size: 1.1rem;
+    color: var(--brand);
+    background: var(--brand-tint);
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+  }
+
+  ol.steps strong { color: var(--ink); }
+  ol.steps span.step-text { color: var(--ink-soft); font-size: 0.94rem; }
+
+  footer.foot {
+    border-top: 1px solid var(--border);
+    padding-top: 18px;
+    font-size: 0.8rem;
+    color: var(--ink-faint);
+  }
+
+  @media (max-width: 640px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .verified-grid { grid-template-columns: 1fr; }
+  }
+</style>
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Source+Sans+3:wght@400;600;700&family=IBM+Plex+Mono:wght@500&display=swap">
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="eyebrow">Relatório de segurança · baseado na auditoria do Grupo Pluma, set/2026</div>
+    <h1 class="title">Segurança do Metas Levo, explicada sem jargão</h1>
+    <p class="lede">A TI fez uma revisão completa de segurança no sistema de metas e encontrou 12 pontos de atenção. Conferi cada um direto no código do projeto: todos são reais. Este guia traduz cada achado pra português simples e responde à pergunta que mais importa — <strong>corrigir isso muda alguma coisa no seu dia a dia?</strong></p>
+    <div class="meta-line">
+      <span>Repositório: metas_levo</span> · <span>Verificado em: 11/09/2026</span> · <span>Destinatário: equipe Levo</span>
+    </div>
+  </header>
+
+  <div class="stats">
+    <div class="stat-tile alta">
+      <div class="stat-num">3</div>
+      <div class="stat-label">Alta</div>
+      <div class="stat-sub">Agir esta semana</div>
+    </div>
+    <div class="stat-tile media">
+      <div class="stat-num">4</div>
+      <div class="stat-label">Média</div>
+      <div class="stat-sub">Resolver quando der</div>
+    </div>
+    <div class="stat-tile baixa">
+      <div class="stat-num">4</div>
+      <div class="stat-label">Baixa</div>
+      <div class="stat-sub">Detalhe, sem pressa</div>
+    </div>
+    <div class="stat-tile ok">
+      <div class="stat-num">5</div>
+      <div class="stat-label">Aprovado</div>
+      <div class="stat-sub">Já está certo</div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span class="legend-item"><span class="dot safe"></span>Verde — não muda nada pra você</span>
+    <span class="legend-item"><span class="dot changes"></span>Dourado — muda um pouco, do jeito esperado</span>
+    <span class="legend-item"><span class="dot decide"></span>Roxo — precisa de uma decisão sua antes</span>
+  </div>
+
+  <div class="callout">
+    <div class="eyebrow">Comece por aqui</div>
+    <h2>A-01 · Qualquer pessoa logada consegue encerrar o ciclo de metas da empresa inteira</h2>
+    <p>Hoje, mesmo um Vendedor — o nível mais baixo da hierarquia — consegue fechar sozinho o ciclo mensal de metas, e até fechar <em>incompleto</em>, sem nenhuma meta ter chegado no fim da cascata. Essa ação deveria ser só do Administrador; foi um esquecimento de configuração, não uma decisão de projeto.</p>
+    <p>A correção é uma linha de código (<code>close</code> entra na lista de ações restritas ao Administrador) e <strong>não tira acesso de ninguém que já devia ter essa permissão</strong> — a única tela que usa esse botão já é uma tela de administrador.</p>
+  </div>
+
+  <section class="sev-group">
+    <div class="sev-heading">
+      <h2>Prioridade alta</h2>
+      <span class="count">2 itens restantes (o 3º, A-01, está acima)</span>
+    </div>
+    <div class="findings">
+
+      <article class="finding">
+        <div class="finding-head"><span class="fid">A-02</span><span class="pill alta">Alta</span></div>
+        <h3>O sistema aceita senha fraca, tipo "1"</h3>
+        <p class="body-text">As regras de senha forte já existem configuradas (tamanho mínimo, não pode ser só número, não pode ser uma senha comum) — só que nos 3 lugares onde uma senha é criada ou trocada (cadastro de usuário, troca de senha, redefinição por e-mail), essas regras nunca são de fato aplicadas. Testando: hoje dá pra definir a senha "1" sem nenhum aviso.</p>
+        <div class="impact-chip changes"><span class="dot changes"></span>Muda um pouco, do jeito esperado</div>
+        <p class="impact-note">Depois de corrigido, criar ou trocar senha vai exigir uma senha de verdade. Não é uma trava nova — é a trava que já devia existir passando a funcionar.</p>
+        <div class="finding-meta"><code>apps/accounts</code><span>Esforço: baixo</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="finding-head"><span class="fid">A-03</span><span class="pill alta">Alta</span></div>
+        <h3>Não existe limite de tentativas de login</h3>
+        <p class="body-text">O sistema aceita quantas tentativas de senha alguém quiser tentar, sem pausa nem bloqueio — o que deixa em aberto um ataque de "força bruta" (ir tentando senha atrás de senha até acertar). Isso pesa mais porque o app hoje também é acessado de fora da rede da empresa, por um túnel.</p>
+        <div class="impact-chip safe"><span class="dot safe"></span>Não muda nada pra você</div>
+        <p class="impact-note">Ninguém que usa o sistema normalmente percebe diferença. Só passa a demorar (ou travar por um tempo) quem errar a senha várias vezes seguidas rápido demais.</p>
+        <div class="finding-meta"><code>apps/accounts</code><span>Esforço: baixo</span></div>
+      </article>
+
+    </div>
+  </section>
+
+  <section class="sev-group">
+    <div class="sev-heading">
+      <h2>Prioridade média</h2>
+      <span class="count">4 itens</span>
+    </div>
+    <div class="findings">
+
+      <article class="finding">
+        <div class="finding-head"><span class="fid">M-01</span><span class="pill media">Média</span></div>
+        <h3>A conexão não está 100% travada contra espionagem</h3>
+        <p class="body-text">O cookie que mantém você logado não está marcado pra viajar só por conexão criptografada, e faltam alguns reforços de segurança de transporte. Isso importa porque o app hoje é acessado de fora pela internet, via um túnel.</p>
+        <div class="impact-chip decide"><span class="dot decide"></span>Precisa de uma decisão sua</div>
+        <p class="impact-note">Antes de ligar essa trava, precisamos decidir: o app só é acessado pelo túnel (sempre criptografado), ou também direto pela rede local? Ligar sem essa definição pode fazer ninguém mais conseguir logar.</p>
+        <div class="finding-meta"><code>config/settings.py</code><span>Esforço: baixo</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="finding-head"><span class="fid">M-02</span><span class="pill media">Média</span></div>
+        <h3>O app roda com o "servidor de teste", não o de produção</h3>
+        <p class="body-text">Backend e frontend ainda rodam no modo usado durante o desenvolvimento — o próprio Django avisa que esse modo não é feito pra ficar exposto fora do computador de quem programa. Se der um erro, a tela pode mostrar pedaços do código-fonte e dados internos pra quem estiver de fora.</p>
+        <div class="impact-chip decide"><span class="dot decide"></span>Precisa de uma decisão sua</div>
+        <p class="impact-note">Essa é a mudança mais estrutural do relatório inteiro: trocar pro servidor de produção é um projeto próprio (novos arquivos de configuração, novo processo de build), não um ajuste rápido. Vale planejar em separado.</p>
+        <div class="finding-meta"><code>docker-compose.yml</code><span>Esforço: médio/alto</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="finding-head"><span class="fid">M-03</span><span class="pill media">Média</span></div>
+        <h3>Uma tela mostra pendências de ramos que não deveriam aparecer</h3>
+        <p class="body-text">Ao checar se um ciclo pode ser fechado, o sistema devolve as pendências de <strong>todos</strong> os ramos da hierarquia, não só do que a pessoa logada tem acesso. Só que essa checagem hoje só é usada pela tela de fechamento de ciclo, que já é restrita ao Administrador.</p>
+        <div class="impact-chip safe"><span class="dot safe"></span>Não muda nada pra você</div>
+        <p class="impact-note">Corrigir fecha uma brecha teórica (alguém chamando a API por fora do app), sem afetar quem já usa a tela normalmente.</p>
+        <div class="finding-meta"><code>apps/cycles/views.py</code><span>Esforço: trivial</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="finding-head"><span class="fid">M-04</span><span class="pill media">Média</span></div>
+        <h3>A porta do banco de dados está aberta, com senha padrão</h3>
+        <p class="body-text">Dá pra conectar direto no banco de dados pela rede, e se ninguém tiver configurado uma senha própria, vale a senha padrão que está escrita no próprio arquivo de configuração do projeto.</p>
+        <div class="impact-chip changes"><span class="dot changes"></span>Muda um pouco, do jeito esperado</div>
+        <p class="impact-note">Fechar essa porta é o certo, mas tira a conveniência de conectar direto no banco por fora (ex: DBeaver) pra olhar dados manualmente — ainda dá pra acessar por dentro do container Docker.</p>
+        <div class="finding-meta"><code>docker-compose.yml</code><span>Esforço: baixo</span></div>
+      </article>
+
+    </div>
+  </section>
+
+  <section class="sev-group">
+    <div class="sev-heading">
+      <h2>Prioridade baixa</h2>
+      <span class="count">4 itens</span>
+    </div>
+    <div class="findings">
+
+      <article class="finding">
+        <div class="finding-head"><span class="fid">B-01</span><span class="pill baixa">Baixa</span></div>
+        <h3>Nomes exportados podem virar "fórmula" no Excel</h3>
+        <p class="body-text">Se um nome vindo do sistema de vendas começar com sinais como <code>=</code>, <code>+</code>, <code>-</code> ou <code>@</code>, o Excel pode interpretar isso como fórmula ao abrir o arquivo exportado. Risco baixo, porque esses nomes vêm de um sistema interno da própria empresa.</p>
+        <div class="impact-chip safe"><span class="dot safe"></span>Não muda nada pra você</div>
+        <div class="finding-meta"><code>cycles · sales_history</code><span>Esforço: trivial</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="finding-head"><span class="fid">B-02</span><span class="pill baixa">Baixa</span></div>
+        <h3>Link de definir senha vale por 3 dias</h3>
+        <p class="body-text">O link enviado por e-mail pra definir a senha continua funcionando por 3 dias. Pra um link de primeiro acesso, 1 dia já seria uma janela mais segura e suficiente.</p>
+        <div class="impact-chip safe"><span class="dot safe"></span>Não muda nada pra você</div>
+        <div class="finding-meta"><code>config/settings.py</code><span>Esforço: trivial</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="finding-head"><span class="fid">B-03</span><span class="pill baixa">Baixa</span></div>
+        <h3>Versões de bibliotecas "soltas" e ferramental de teste na mesma imagem</h3>
+        <p class="body-text">As bibliotecas do backend não têm uma versão exata travada, o que pode mudar sozinho o que é instalado no futuro. Além disso, ferramentas usadas só por quem desenvolve (testes, formatação de código) vão junto pra produção sem necessidade.</p>
+        <div class="impact-chip safe"><span class="dot safe"></span>Não muda nada pra você</div>
+        <div class="finding-meta"><code>backend/requirements.txt</code><span>Esforço: baixo</span></div>
+      </article>
+
+      <article class="finding">
+        <div class="finding-head"><span class="fid">B-04</span><span class="pill baixa">Baixa</span></div>
+        <h3>Chave secreta do sistema tem um valor padrão de reserva</h3>
+        <p class="body-text">Se a variável de configuração da chave secreta do Django não for definida, o sistema usa um valor padrão conhecido publicamente, em vez de recusar iniciar.</p>
+        <div class="impact-chip safe"><span class="dot safe"></span>Não muda nada pra você</div>
+        <p class="impact-note">Vale só confirmar que o servidor real já tem essa chave configurada com um valor próprio (o que parece ser o caso).</p>
+        <div class="finding-meta"><code>config/settings.py</code><span>Esforço: trivial</span></div>
+      </article>
+
+    </div>
+  </section>
+
+  <div class="verified">
+    <h2>O que já está certo — não mexer</h2>
+    <p class="body-text">Esses pontos foram checados especificamente e passaram. Registrados aqui pra reconhecer o que já foi bem feito, e pra ninguém "consertar" o que não está quebrado.</p>
+    <div class="verified-grid">
+      <div class="verified-item"><span class="check">✓</span>Nenhum jeito de injetar comando no banco de dados (SQL injection)</div>
+      <div class="verified-item"><span class="check">✓</span>Cada pessoa só acessa as metas do próprio ramo, mesmo tentando forçar por fora</div>
+      <div class="verified-item"><span class="check">✓</span>O frontend não deixa código estranho ser executado dentro da tela (XSS)</div>
+      <div class="verified-item"><span class="check">✓</span>Sessão de login guardada em cookie, não em um lugar que outro script leria</div>
+      <div class="verified-item"><span class="check">✓</span>Nenhuma execução de código externo perigosa no backend</div>
+    </div>
+  </div>
+
+  <section class="order-section">
+    <h2>Ordem recomendada</h2>
+    <p class="body-text">Do mais urgente e mais barato de corrigir, até o que exige mais planejamento.</p>
+    <ol class="steps">
+      <li><div><strong>Fechar a brecha do encerramento de ciclo (A-01).</strong> <span class="step-text">Uma linha de código, hoje mesmo.</span></div></li>
+      <li><div><strong>Ativar as regras de senha e o limite de tentativas de login (A-02, A-03).</strong> <span class="step-text">Baixo esforço, sem quebrar fluxo de ninguém que já usa senha de verdade.</span></div></li>
+      <li><div><strong>Decidir a forma de acesso ao app e então travar cookies/HTTPS e fechar a porta do banco (M-01, M-04).</strong> <span class="step-text">Precisa da definição: só túnel, ou também rede local.</span></div></li>
+      <li><div><strong>Planejar a troca pro servidor de produção (M-02).</strong> <span class="step-text">Tratar como projeto à parte, não como ajuste pontual.</span></div></li>
+      <li><div><strong>Fechar o vazamento entre ramos, neutralizar o CSV e reduzir o prazo do link de senha (M-03, B-01, B-02).</strong> <span class="step-text">Baixo esforço, sem impacto de uso.</span></div></li>
+      <li><div><strong>Travar versões de dependências e exigir a chave secreta (B-03, B-04).</strong> <span class="step-text">Mexe só no processo de build.</span></div></li>
+    </ol>
+  </section>
+
+  <footer class="foot">
+    Baseado na auditoria de segurança do Grupo Pluma (setembro de 2026), com verificação linha a linha contra o código do repositório <strong>metas_levo</strong> em 11/09/2026.
+  </footer>
+
+</div>

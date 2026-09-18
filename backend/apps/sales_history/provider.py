@@ -164,3 +164,64 @@ class SalesHistoryProvider:
             )
 
         return [MonthlyQuantity(ano=ano, mes=mes, quantity_kg=by_month[(ano, mes)]) for ano, mes in months]
+
+    @staticmethod
+    def target_month_breakdown(hierarchy_node_id: int, ano: int, mes: int, group_id: int) -> dict[int, float]:
+        """Realizado de um único mês, por subgrupo, para todo Vendedor descendente do nó — usado
+        pelo acompanhamento de resultados (Meta vs Realizado por subgrupo da tela "Acumulado de
+        Vendas"), não pelas estratégias de distribuição (P1-P4, que sempre pesam por `group_id`,
+        nunca por subgrupo — ver docstring de `target_history`). Uma query por (nó, grupo),
+        independente de quantos subgrupos o grupo tenha — ao contrário de chamar `target_history`
+        subgrupo a subgrupo, que seria uma query por subgrupo.
+
+        Cobertura de férias: mesma regra de `target_history` (o volume do titular coberto, no mês
+        exato, soma no ferista que o cobre), restrita ao mês pedido.
+        """
+        vendedor_ids = list(
+            HierarchyNode.objects.filter(
+                id__in=ScopeResolver.descendant_ids(hierarchy_node_id), level=HierarchyNode.Level.VENDEDOR
+            ).values_list("id", flat=True)
+        )
+        salesperson_names = list(
+            ExternalSalespersonMapping.objects.filter(hierarchy_node_id__in=vendedor_ids).values_list(
+                "external_name", flat=True
+            )
+        )
+        code_to_subgroup = dict(
+            ExternalProductMapping.objects.filter(subgroup__group_id=group_id).values_list(
+                "external_code", "subgroup_id"
+            )
+        )
+
+        totals: dict[int, float] = {}
+
+        def _accumulate(names: list[str]) -> None:
+            if not names or not code_to_subgroup:
+                return
+            queryset = DistributionBaseline.objects.filter(
+                ano=ano, mes=mes, salesperson_name__in=names, subgroup_name__in=code_to_subgroup
+            ).values_list("subgroup_name", "total_quantity")
+            for code, total in queryset:
+                subgroup_id = code_to_subgroup.get(code)
+                if subgroup_id is not None:
+                    totals[subgroup_id] = totals.get(subgroup_id, 0.0) + float(total)
+
+        _accumulate(salesperson_names)
+
+        vendedor_id_set = set(vendedor_ids)
+        covered_node_ids = [
+            covered_node_id
+            for covered_node_id in FeristaCoverage.objects.filter(
+                covering_node_id__in=vendedor_ids, ano=ano, mes=mes
+            ).values_list("covered_node_id", flat=True)
+            if covered_node_id not in vendedor_id_set
+        ]
+        if covered_node_ids:
+            titular_names = list(
+                ExternalSalespersonMapping.objects.filter(hierarchy_node_id__in=covered_node_ids).values_list(
+                    "external_name", flat=True
+                )
+            )
+            _accumulate(titular_names)
+
+        return totals

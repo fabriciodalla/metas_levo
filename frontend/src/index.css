@@ -3671,3 +3671,640 @@ legend {
 .mg-group-expand {
   border-left: 4px solid var(--color-primary);
 }
+
+/* ---------- Acompanhamento > Acumulado de Vendas ---------- */
+
+.acv-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.acv-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.acv-back-button {
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 0;
+}
+
+.acv-back-button:hover {
+  text-decoration: underline;
+}
+
+.acv-header-row {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  justify-content: space-between;
+}
+
+.acv-node-title {
+  margin: 0;
+}
+
+.acv-dias-uteis {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+/* Faixa de 4 totais no topo (Meta/Realizado/Falta/Ritmo, somados de todos os grupos) */
+
+.acv-kpi-row {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(4, 1fr);
+}
+
+/* Usada no Acumulado de Clientes: 6 cards em 3 colunas x 2 linhas, em vez dos 4 do Acumulado de
+   Vendas — mesma classe base (`acv-kpi-row`), só troca a contagem de colunas no desktop. */
+.acv-kpi-row-3col {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.acv-kpi-card {
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 24px rgba(0, 74, 45, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+}
+
+.acv-kpi-card-head {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.acv-kpi-icon {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  flex-shrink: 0;
+  height: 36px;
+  justify-content: center;
+  width: 36px;
+}
+
+/* Ícones em PNG monocromático (pasta `icones` na raiz) recolorido via mask — herda a cor
+   (currentColor) do círculo em volta (classes acv-kpi-icon e acv-group-icon), então o mesmo
+   arquivo serve pra qualquer tom de status sem precisar de uma versão por cor. */
+.acv-icon-glyph {
+  background-color: currentColor;
+  display: inline-block;
+  flex-shrink: 0;
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+}
+
+.acv-kpi-icon-primary {
+  background: var(--color-primary-subtle);
+  color: var(--color-primary);
+}
+
+.acv-kpi-icon-success {
+  background: var(--color-success-subtle);
+  color: var(--color-success);
+}
+
+.acv-kpi-icon-danger {
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
+}
+
+.acv-kpi-icon-warning {
+  background: var(--color-warning-subtle);
+  color: var(--color-warning);
+}
+
+.acv-kpi-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+/* Só no Acumulado de Clientes: sem a legenda abaixo do título (removida a pedido do usuário,
+   2026-09-18 — "tava estranho"), o título vira a única informação de contexto do card, então
+   ganha uma fonte maior. Modificador em vez de mudar `.acv-kpi-label` direto pra não alterar o
+   Acumulado de Vendas, que ainda usa legenda embaixo do título. */
+.acv-kpi-label-lg {
+  font-size: 1.05rem;
+}
+
+.acv-kpi-subtitle {
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+}
+
+.acv-kpi-value {
+  font-size: 1.5rem;
+  font-weight: 800;
+}
+
+.acv-kpi-value-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.acv-kpi-value-success {
+  color: var(--color-success);
+}
+
+.acv-kpi-value-danger {
+  color: var(--color-danger);
+}
+
+.acv-kpi-caption {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+/* Card de KPI com quebra por grupo (Frangos/Revenda) em vez de um valor único — Ticket médio por
+   volume, no Acumulado de Clientes. Cada grupo vira um chip com cor própria (pedido do usuário,
+   2026-09-18) pra separar visualmente os dois de cara, sem precisar ler o nome primeiro. */
+.acv-kpi-group-split {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.acv-kpi-group-split-item {
+  align-items: center;
+  border-left: 3px solid transparent;
+  border-radius: var(--radius-md);
+  display: flex;
+  gap: 10px;
+  padding: 8px 10px;
+}
+
+.acv-kpi-group-split-item-accent {
+  background: var(--color-accent-subtle);
+  border-left-color: var(--color-accent);
+}
+
+.acv-kpi-group-split-item-info {
+  background: var(--color-info-subtle);
+  border-left-color: var(--color-info);
+}
+
+.acv-kpi-group-split-item-neutral {
+  background: var(--gray-100);
+  border-left-color: var(--gray-500);
+}
+
+.acv-kpi-group-split-icon {
+  align-items: center;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.acv-kpi-group-split-icon-accent {
+  color: var(--color-accent);
+}
+
+.acv-kpi-group-split-icon-info {
+  color: var(--color-info);
+}
+
+.acv-kpi-group-split-icon-neutral {
+  color: var(--color-text-muted);
+}
+
+.acv-kpi-group-split-name {
+  color: var(--color-text);
+  flex: 1;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.acv-kpi-group-split-value {
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+/* Cards por grupo de produto (Frangos/Revenda/...) */
+
+.acv-group-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.acv-group-card-head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+  row-gap: 10px;
+}
+
+.acv-group-card-head .badge {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.acv-group-icon {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  flex-shrink: 0;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+
+.acv-group-icon-success {
+  background: var(--color-success-subtle);
+  color: var(--color-success);
+}
+
+.acv-group-icon-warning {
+  background: var(--color-warning-subtle);
+  color: var(--color-warning);
+}
+
+.acv-group-icon-danger {
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
+}
+
+.acv-group-icon-neutral {
+  background: var(--gray-100);
+  color: var(--color-text-muted);
+}
+
+.acv-group-titles {
+  flex: 0 0 auto;
+}
+
+.acv-group-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.acv-group-subtitle {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.acv-metric-value-success {
+  color: var(--color-success);
+}
+
+.acv-metric-value-warning {
+  color: var(--color-warning);
+}
+
+.acv-metric-value-danger {
+  color: var(--color-danger);
+}
+
+.acv-goal-progress {
+  position: relative;
+}
+
+.acv-goal-marker {
+  background: var(--color-text-muted);
+  bottom: -2px;
+  opacity: 0.6;
+  position: absolute;
+  top: -2px;
+  width: 2px;
+}
+
+/* Volume e Subgrupos embutidos no cabeçalho do card de grupo — rótulo, percentual (e a régua de
+   atingimento no caso do Volume) cabem ao lado do título, entre ele e o badge, pra encurtar o
+   card (antes era um bloco próprio com fonte grande, empurrando os números Meta/Realizado/Falta/
+   Meta diária pra baixo). */
+
+.acv-group-volume-inline {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 24px;
+  margin: 0 16px;
+  min-width: 160px;
+  row-gap: 6px;
+}
+
+.acv-group-volume-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.acv-group-volume-row-bar {
+  flex: 1 1 220px;
+}
+
+.acv-group-volume-label {
+  align-items: center;
+  color: var(--color-text-muted);
+  display: inline-flex;
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  gap: 4px;
+  min-width: 68px;
+  text-transform: uppercase;
+}
+
+.acv-group-volume-pct {
+  flex-shrink: 0;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.acv-group-volume-goal {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.acv-group-volume-bar {
+  flex: 1;
+  min-width: 60px;
+}
+
+.acv-group-figures {
+  display: grid;
+  gap: 12px 20px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  margin-top: 14px;
+}
+
+.acv-group-figure {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.acv-group-figure-label {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}
+
+.acv-group-figure-value {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acv-group-figure-value-danger {
+  color: var(--color-danger);
+}
+
+.acv-group-figure-value-success {
+  color: var(--color-success);
+}
+
+.acv-group-subgroup-wrap {
+  margin-top: 14px;
+}
+
+.acv-team-row {
+  cursor: pointer;
+}
+
+.acv-team-row:hover {
+  background: var(--color-surface-hover, rgba(0, 74, 45, 0.04));
+}
+
+.acv-team-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.acv-team-cell-line {
+  align-items: baseline;
+  display: flex;
+  font-weight: 700;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.acv-team-cell-tag {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  min-width: 62px;
+}
+
+.acv-team-cell-value {
+  font-size: 16px;
+}
+
+table.acv-team-table td,
+table.acv-team-table th {
+  padding: var(--space-4) var(--space-5);
+}
+
+.acv-team-cell-success {
+  color: var(--color-success);
+}
+
+.acv-team-cell-warning {
+  color: var(--color-warning);
+}
+
+.acv-team-cell-danger {
+  color: var(--color-danger);
+}
+
+.acv-team-cell-neutral {
+  color: var(--color-text-muted);
+}
+
+.acv-team-cell-empty {
+  color: var(--color-text-muted);
+}
+
+/* Linha da equipe expansível: clicar abre embutido o resumo daquela pessoa (volume/subgrupos por
+   grupo + o nível hierárquico abaixo dela), sem sair da tela — ver TeamRow/TeamMemberPanel. */
+
+.acv-team-row-name {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.acv-team-detail-row {
+  cursor: default;
+}
+
+.acv-team-detail-row:hover {
+  background: none;
+}
+
+.acv-team-detail-row > td {
+  background: var(--gray-50, rgba(0, 74, 45, 0.03));
+  padding: 16px;
+}
+
+.acv-member-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.acv-member-panel-empty {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.acv-member-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.acv-member-group {
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border);
+  border-left-width: 4px;
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 18px;
+  width: 100%;
+}
+
+.acv-member-group-success {
+  border-left-color: var(--color-success);
+}
+
+.acv-member-group-warning {
+  border-left-color: var(--color-warning);
+}
+
+.acv-member-group-danger {
+  border-left-color: var(--color-danger);
+}
+
+.acv-member-group-neutral {
+  border-left-color: var(--color-border);
+}
+
+.acv-member-group-head {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.acv-member-group-name {
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.acv-member-group-stats {
+  column-gap: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  row-gap: 12px;
+}
+
+.acv-member-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.acv-member-stat-label {
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.acv-member-stat-value {
+  font-size: 0.95rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acv-metric-value-neutral {
+  color: var(--color-text-muted);
+}
+
+.acv-member-stat-caption {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acv-subgroup-toggle {
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  display: inline-flex;
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  gap: 4px;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.acv-member-subgroup-table-wrap {
+  margin-bottom: 0;
+}
+
+.acv-subgroup-table th,
+.acv-subgroup-table td {
+  white-space: nowrap;
+}
+
+.acv-member-subteam-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.acv-member-subteam {
+  margin-top: 4px;
+}
+
+@media (max-width: 900px) {
+  .acv-kpi-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .acv-kpi-row {
+    grid-template-columns: 1fr;
+  }
+}

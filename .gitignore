@@ -13,3 +13,11 @@ frontend/.vite/
 .claude/
 usuario e senha.xlsx
 Pasta2.xlsx
+
+# Exportações locais com dados de clientes e estrutura comercial
+backend/clientportfolio_dump.json
+backend/clientportfolio_vendedor_dump.json
+backend/vendedores_hierarquia.json
+
+# Arquivos-fonte dos ícones; a aplicação usa as cópias em frontend/src/assets
+icones/

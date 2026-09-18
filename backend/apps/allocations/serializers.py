@@ -212,3 +212,64 @@ class ResetGroupRequestSerializer(serializers.Serializer):
     cycle_id = serializers.IntegerField()
     owner_node_id = serializers.IntegerField()
     group_id = serializers.IntegerField()
+
+
+class SubgroupResultSerializer(serializers.Serializer):
+    """Tela "Acompanhamento > Acumulado de Vendas" — ver `apps.allocations.results`."""
+
+    subgroup_id = serializers.IntegerField()
+    subgroup_nome = serializers.CharField()
+    meta_kg = serializers.IntegerField()
+    realizado_kg = serializers.FloatField()
+    pct = serializers.FloatField(allow_null=True)
+    atingiu = serializers.BooleanField(allow_null=True)
+
+
+class GroupResultSerializer(serializers.Serializer):
+    group_id = serializers.IntegerField()
+    group_nome = serializers.CharField()
+    meta_kg = serializers.IntegerField()
+    realizado_kg = serializers.FloatField()
+    pct = serializers.FloatField(allow_null=True)
+    faltam_kg = serializers.IntegerField()
+    status = serializers.CharField()
+    ritmo_kg_dia_util = serializers.FloatField(allow_null=True)
+    tendencia_kg = serializers.FloatField(allow_null=True)
+    same_month_last_year_kg = serializers.FloatField(allow_null=True)
+    last_3_months_avg_kg = serializers.FloatField(allow_null=True)
+    subgrupos_com_meta = serializers.IntegerField()
+    subgrupos_atingidos = serializers.IntegerField()
+    pct_subgrupos = serializers.FloatField(allow_null=True)
+    subgrupos_atingiu = serializers.BooleanField(allow_null=True)
+    atingiu_grupo = serializers.BooleanField(allow_null=True)
+    subgrupos = SubgroupResultSerializer(many=True)
+
+
+class TeamGroupSummarySerializer(serializers.Serializer):
+    group_id = serializers.IntegerField()
+    group_nome = serializers.CharField()
+    meta_kg = serializers.IntegerField()
+    realizado_kg = serializers.FloatField()
+    pct = serializers.FloatField(allow_null=True)
+    status = serializers.CharField()
+    pct_subgrupos = serializers.FloatField(allow_null=True)
+    subgrupos_atingiu = serializers.BooleanField(allow_null=True)
+    atingiu_grupo = serializers.BooleanField(allow_null=True)
+
+
+class TeamMemberResultSerializer(serializers.Serializer):
+    node_id = serializers.IntegerField()
+    node_nome = serializers.CharField()
+    status_geral = serializers.CharField()
+    grupos = TeamGroupSummarySerializer(many=True)
+
+
+class AccumulatedSalesResultSerializer(serializers.Serializer):
+    node_id = serializers.IntegerField()
+    node_nome = serializers.CharField()
+    cycle_id = serializers.IntegerField()
+    cycle_ano = serializers.IntegerField()
+    cycle_mes = serializers.IntegerField()
+    dias_uteis_restantes = serializers.IntegerField()
+    grupos = GroupResultSerializer(many=True)
+    equipe = TeamMemberResultSerializer(many=True)

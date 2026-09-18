@@ -12,7 +12,9 @@ from apps.hierarchy.models import HierarchyNode
 from apps.hierarchy.services import ExternalSalespersonMatchingService
 
 from .models import GoalAllocation
+from .results import AccumulatedSalesResultsService
 from .serializers import (
+    AccumulatedSalesResultSerializer,
     ChildDistributionContextSerializer,
     CreateRootAllocationSerializer,
     DistributeRequestSerializer,
@@ -241,6 +243,34 @@ class GoalAllocationViewSet(ReadOnlyModelViewSet):
         ]
 
         return Response(GroupSuggestionSerializer(payload, many=True).data)
+
+    @action(detail=False, methods=["get"], url_path="results/acumulado-vendas")
+    def acumulado_vendas(self, request):
+        """Tela "Acompanhamento > Acumulado de Vendas": Meta vs Realizado por grupo/subgrupo,
+        consolidado na sub-árvore do nó filtrado, com resumo por subordinado direto (equipe) pra
+        apoiar o drill-down. Escopo por visibilidade (qualquer nó dentro da sub-árvore do usuário),
+        não por posse direta — diferente de `suggestions`/`create_root`, que só o dono do próprio
+        nó pode acionar: aqui um Gerente precisa poder consultar o resultado de um Vendedor lá
+        embaixo, não só o dele mesmo."""
+        cycle_id = request.query_params.get("cycle")
+        node_id = request.query_params.get("node")
+        if not cycle_id or not node_id:
+            return Response(
+                {"detail": "Parâmetros cycle e node são obrigatórios."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cycle = get_object_or_404(Cycle, id=cycle_id)
+        node = get_object_or_404(HierarchyNode, id=node_id)
+
+        if not HierarchyNode.objects.visible_to(request.user).filter(id=node.id).exists():
+            return Response({"detail": "Você não tem acesso a esse nó."}, status=status.HTTP_403_FORBIDDEN)
+
+        # Mesmo motivo de `distribution_context`/`subgroup_distribution_context`: garante que um
+        # Vendedor cadastrado depois da última sincronização manual já entra com realizado real.
+        ExternalSalespersonMatchingService.sync()
+        result = AccumulatedSalesResultsService.build(node, cycle)
+        return Response(AccumulatedSalesResultSerializer(result).data)
 
     @action(detail=False, methods=["post"], url_path="root", url_name="root")
     def create_root(self, request):

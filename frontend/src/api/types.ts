@@ -246,3 +246,106 @@ export interface RepresentanteInput {
   is_representante?: true;
   level?: "VENDEDOR";
 }
+
+// Tela "Acompanhamento > Acumulado de Vendas" — GET /allocations/results/acumulado-vendas/.
+export type AcvStatus = "VERDE" | "AMARELO" | "VERMELHO" | "SEM_META";
+
+export interface AcvSubgroupResult {
+  subgroup_id: number;
+  subgroup_nome: string;
+  meta_kg: number;
+  realizado_kg: number;
+  pct: number | null;
+  atingiu: boolean | null;
+}
+
+export interface AcvGroupResult {
+  group_id: number;
+  group_nome: string;
+  meta_kg: number;
+  realizado_kg: number;
+  pct: number | null;
+  faltam_kg: number;
+  status: AcvStatus;
+  ritmo_kg_dia_util: number | null;
+  tendencia_kg: number | null;
+  same_month_last_year_kg: number | null;
+  last_3_months_avg_kg: number | null;
+  subgrupos_com_meta: number;
+  subgrupos_atingidos: number;
+  pct_subgrupos: number | null;
+  subgrupos_atingiu: boolean | null;
+  atingiu_grupo: boolean | null;
+  subgrupos: AcvSubgroupResult[];
+}
+
+export interface AcvTeamGroupSummary {
+  group_id: number;
+  group_nome: string;
+  meta_kg: number;
+  realizado_kg: number;
+  pct: number | null;
+  status: AcvStatus;
+  pct_subgrupos: number | null;
+  subgrupos_atingiu: boolean | null;
+  atingiu_grupo: boolean | null;
+}
+
+export interface AcvTeamMemberResult {
+  node_id: number;
+  node_nome: string;
+  status_geral: AcvStatus;
+  grupos: AcvTeamGroupSummary[];
+}
+
+export interface AccumulatedSalesResult {
+  node_id: number;
+  node_nome: string;
+  cycle_id: number;
+  cycle_ano: number;
+  cycle_mes: number;
+  dias_uteis_restantes: number;
+  grupos: AcvGroupResult[];
+  equipe: AcvTeamMemberResult[];
+}
+
+export interface ClientInactivePurchaseItem {
+  subgroup_name: string;
+  peso_kg: number;
+}
+
+export interface ClientInactiveRow {
+  client_code: number;
+  client_name: string;
+  ultima_compra_ano: number | null;
+  ultima_compra_mes: number | null;
+  itens_ultima_compra: ClientInactivePurchaseItem[];
+  peso_ultima_compra_kg: number;
+}
+
+export interface ClientGroupTicketMedio {
+  grupo_id: number;
+  grupo_nome: string;
+  clientes_ativos: number;
+  ticket_medio_kg: number | null;
+}
+
+export interface ClientAccumuladoResult {
+  node_id: number;
+  node_nome: string;
+  ano: number;
+  mes: number;
+  carteira_total: number;
+  clientes_ativos: number;
+  clientes_ativos_mes_anterior: number;
+  positivacao_pct: number | null;
+  positivacao_meta_pct: number;
+  captacao: number;
+  captacao_meta: number;
+  base_clientes_meta: number;
+  clientes_ativos_meta: number;
+  clientes_sem_compra_count: number;
+  ticket_medio_kg: number | null;
+  ticket_medio_por_grupo: ClientGroupTicketMedio[];
+  clientes_sem_compra: ClientInactiveRow[];
+}
