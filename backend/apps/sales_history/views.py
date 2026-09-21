@@ -94,6 +94,7 @@ class VendorSubgroupExportView(APIView):
             [
                 "coordenador_local",
                 "vendedor",
+                "grupo",
                 "subgrupo",
                 "soma_3_meses_kg",
                 "soma_12_meses_kg",
@@ -106,6 +107,7 @@ class VendorSubgroupExportView(APIView):
                 [
                     _csv_safe(row.local_nome),
                     _csv_safe(row.vendedor_nome),
+                    _csv_safe(row.grupo_nome),
                     _csv_safe(row.subgrupo_nome),
                     row.sum_3_months_kg,
                     row.sum_12_months_kg,

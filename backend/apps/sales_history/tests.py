@@ -563,6 +563,7 @@ class VendorSubgroupExportServiceTests(TestCase):
 
         joao_row = next(r for r in rows if r.vendedor_nome == "Joao")
         self.assertEqual(joao_row.local_nome, "Local Sul")
+        self.assertEqual(joao_row.grupo_nome, "Embutidos")
         self.assertEqual(joao_row.subgrupo_nome, "Linguica")
         # Soma dos 3 meses (30+60+90=180) / 3 meses — não / quantidade de linhas somadas.
         self.assertEqual(joao_row.sum_3_months_kg, 180)
