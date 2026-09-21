@@ -6,7 +6,6 @@
 # Frontend: build estático do Vite servido por nginx (usuário sem privilégio, porta 8080), que
 # também faz proxy de /api/, /admin/ e /static/ pro backend (frontend/nginx.conf) — mesma origem
 # pra SPA e API, sem CORS.
-name: metaslevo_prod
 
 services:
   db:
@@ -37,11 +36,11 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/admin/login/')"]
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8000), timeout=3)"]
       interval: 30s
       timeout: 5s
-      retries: 3
-      start_period: 10s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   frontend:
@@ -51,6 +50,12 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
 volumes:
