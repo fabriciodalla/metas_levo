@@ -1,11 +1,11 @@
 # Stack de produção — separada de docker-compose.yml (dev) de propósito, ver CLAUDE.md.
 # Uso:
 #   docker compose -f docker-compose.prod.yml up -d --build
-#   docker compose -f docker-compose.prod.yml exec backend python manage.py migrate  (manual, 1x por deploy com migração nova)
 #
-# Backend: gunicorn + collectstatic automático no start (backend/entrypoint.prod.sh).
-# Frontend: build estático do Vite servido por nginx, que também faz proxy de /api/, /admin/ e
-# /static/ pro backend (frontend/nginx.conf) — mesma origem pra SPA e API, sem CORS.
+# Backend: gunicorn + collectstatic e migrate automáticos no start (backend/entrypoint.prod.sh).
+# Frontend: build estático do Vite servido por nginx (usuário sem privilégio, porta 8080), que
+# também faz proxy de /api/, /admin/ e /static/ pro backend (frontend/nginx.conf) — mesma origem
+# pra SPA e API, sem CORS.
 name: metaslevo_prod
 
 services:
@@ -14,7 +14,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-metaslevo}
       POSTGRES_USER: ${POSTGRES_USER:-metaslevo}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-metaslevo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD nas variáveis de ambiente}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -48,10 +48,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.prod
-    ports:
-      - "${PROD_HTTP_PORT:-8080}:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
